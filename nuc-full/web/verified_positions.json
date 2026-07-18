@@ -1,0 +1,8 @@
+{
+  "_comment": "Operator-confirmed correct node positions. Used as trusted anchors (never auto-corrected by the localiser overlay) and as ground-truth for accuracy checks. Add entries by pubkey prefix (any length; longer = less ambiguous). Lives in web/ so the server can write it via the in-app 'mark correct' button.",
+  "verified": [
+    { "pubkey_prefix": "23f8c8cb", "name": "NL-NIJ-NIMBUS", "note": "operator-confirmed" },
+    { "pubkey_prefix": "a0a2bf869205ca2d", "name": "PI4TTA Arnhem Repeater", "note": "operator-confirmed" },
+    { "pubkey_prefix": "db11", "name": "collector / NL-NIJ-Dikkeboom", "note": "operator-confirmed; refine prefix if it collides" }
+  ]
+}

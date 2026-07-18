@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the MeshCore triangulator accuracy self-check daily
+
+[Timer]
+# Once a day at 04:00 (after a full night of collection). Persistent = catch up
+# on the next boot if the NUC was off when it was due.
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

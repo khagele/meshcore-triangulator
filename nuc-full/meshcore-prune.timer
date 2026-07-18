@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly retention prune of the MeshCore triangulator database
+
+[Timer]
+# Weekly, Monday 03:30 (before the daily validate/export rhythm). Catch up if missed.
+OnCalendar=Mon *-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

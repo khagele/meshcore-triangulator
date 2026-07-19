@@ -7,6 +7,9 @@ services:
     # Override in .env (e.g. your fork's image) without editing this file.
     image: ${TRIANGULATOR_IMAGE:-ghcr.io/khagele/meshcore-triangulator:latest}
     container_name: triangulator
+    # Opt-in marker for auto-updates: harmless if you don't run Watchtower.
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
     restart: unless-stopped
     # This will be accessed with cloudflare, no need to expose it to the public, uncomment to test locally
     # ports:

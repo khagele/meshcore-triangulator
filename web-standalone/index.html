@@ -81,7 +81,8 @@
       align-items: center;
       gap: 8px;
     }
-    .map-toolbar button {
+    .map-toolbar button,
+    .map-toolbar a {
       margin: 0;
       border-radius: 10px;
       padding: 7px 12px;
@@ -89,6 +90,10 @@
       font-weight: 600;
       font-size: 0.85rem;
       cursor: pointer;
+      text-decoration: none;
+    }
+    .map-toolbar-group.is-end {
+      margin-left: auto;
     }
 
     /* Flat column — the section blocks are the cards, no card-in-card. */
@@ -718,6 +723,9 @@
         <div class="map-toolbar-group">
           <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
           <button id="open-3d-button" type="button" class="button-secondary">3D View</button>
+        </div>
+        <div class="map-toolbar-group is-end">
+          <a href="https://github.com/khagele/meshcore-triangulator" target="_blank" rel="noopener" class="button-muted">GitHub ↗</a>
         </div>
       </div>
       <section class="map-wrap">

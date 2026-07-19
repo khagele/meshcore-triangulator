@@ -1,8 +1,13 @@
-# MeshCore Triangulator — handoff bundle
+# MeshCore Triangulator
+
+[![Build web-standalone image](https://github.com/khagele/meshcore-triangulator/actions/workflows/docker-build.yml/badge.svg)](https://github.com/khagele/meshcore-triangulator/actions/workflows/docker-build.yml)
 
 Localises repeaters/nodes/traffic sources on MeshCore from the mesh topology
-(who heard what, from where). Two components, pick based on what you're
-hosting:
+(who heard what, from where).
+
+**Live demo:** [triangulator.dutchmeshcore.nl](https://triangulator.dutchmeshcore.nl/)
+
+Two components, pick based on what you're hosting:
 
 ## `web-standalone/` — start here
 

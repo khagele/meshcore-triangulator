@@ -1,8 +1,9 @@
 # macOS
 .DS_Store
 
-# Local config (keep broker credentials out of git)
+# Local config (keep broker credentials / tunnel tokens out of git)
 config.ini
+.env
 
 # Local data
 *.db

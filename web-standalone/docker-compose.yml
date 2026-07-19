@@ -1,0 +1,69 @@
+# Meshcore triangulator, exposed via a Cloudflare Tunnel.
+# Setup: see README.md ("Docker") — cp .env.example .env, set TUNNEL_TOKEN,
+# point the tunnel's public hostname at http://triangulator:8000.
+
+services:
+  triangulator:
+    # Override in .env (e.g. your fork's image) without editing this file.
+    image: ${TRIANGULATOR_IMAGE:-ghcr.io/khagele/meshcore-triangulator:latest}
+    container_name: triangulator
+    restart: unless-stopped
+    # This will be accessed with cloudflare, no need to expose it to the public, uncomment to test locally
+    # ports:
+    #   - "8000:8000"
+    networks: [internal]
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloudflared:
+    # Pin to a specific release in production. See https://github.com/cloudflare/cloudflared/releases
+    image: cloudflare/cloudflared:latest
+    container_name: triangulator-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set in .env}
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [internal]
+    depends_on:
+      triangulator:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16M,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  internal:
+    driver: bridge

@@ -907,8 +907,8 @@
     }
 
     function getRegionRadiusKm() {
-      const parsed = Number.parseFloat(regionRadiusInput.value || "50");
-      return clamp(Number.isFinite(parsed) ? parsed : 50, 5, 200);
+      const parsed = Number.parseFloat(regionRadiusInput.value || "6");
+      return clamp(Number.isFinite(parsed) ? parsed : 6, 1, 200);
     }
 
     function makeNodeIcon(color, large = false) {

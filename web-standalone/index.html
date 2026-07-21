@@ -37,9 +37,125 @@
         linear-gradient(180deg, #0a1b24 0%, #071118 100%);
     }
 
+    /* Full-width bar above everything: dutchmeshcore.nl branding + community
+       nav. Kept visually distinct from the app's own teal palette (a thin
+       accent stripe, not a repaint) so it still reads as "this page, but
+       tied to the wider community". */
+    .topbar {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      width: min(1200px, calc(100% - 32px));
+      margin: 16px auto 0;
+      padding: 10px 16px 10px 20px;
+      border-radius: 12px;
+      background: #0b0d12;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .topbar-stripe {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      border-radius: 12px 0 0 12px;
+      background: linear-gradient(180deg, #c8102e 0%, #c8102e 33%, #ffffff 33%, #ffffff 66%, #21468b 66%, #21468b 100%);
+    }
+    .topbar-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+    .topbar-mark {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #c8102e, #21468b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text);
+      flex: 0 0 auto;
+    }
+    .topbar-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+    .topbar-nav {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .topbar-nav a {
+      color: var(--muted);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .topbar-nav a:hover {
+      color: var(--text);
+    }
+    .topbar-dropdown {
+      position: relative;
+    }
+    .topbar-dropdown summary {
+      cursor: pointer;
+      color: var(--text);
+      list-style: none;
+    }
+    .topbar-dropdown summary::-webkit-details-marker {
+      display: none;
+    }
+    .topbar-dropdown summary::after {
+      content: " \25BE";
+    }
+    .topbar-dropdown-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 16px;
+      padding: 12px 14px;
+      min-width: 260px;
+      border-radius: 12px;
+      background: rgba(7, 25, 35, 0.97);
+      border: 1px solid rgba(143, 187, 201, 0.18);
+      box-shadow: var(--shadow);
+      z-index: 20;
+    }
+    .topbar-dropdown-menu a {
+      font-size: 0.82rem;
+    }
+    .topbar-github {
+      margin-left: auto;
+      flex: 0 0 auto;
+      border-radius: 10px;
+      padding: 6px 12px;
+      font-weight: 600;
+      font-size: 0.8rem;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      text-decoration: none;
+    }
+    .topbar-github:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+    }
+
     .shell {
       width: min(1200px, calc(100% - 32px));
-      margin: 24px auto;
+      margin: 16px auto 24px;
       display: grid;
       grid-template-columns: 300px 1fr;
       gap: 18px;
@@ -55,34 +171,27 @@
       backdrop-filter: blur(16px);
     }
 
-    /* Right column: horizontal control toolbar stacked above the map. */
     .map-col {
       display: flex;
       flex-direction: column;
       gap: 10px;
       min-width: 0;
     }
-    .map-toolbar {
+
+    /* Left column: map action buttons live above Step 1 (not floating over
+       the map) so they're the first thing visible on mobile too, where the
+       left column stacks before the map. */
+    .controls-card {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 8px 12px;
-      padding: 8px 12px;
-      border-radius: 14px;
-      background: rgba(7, 17, 24, 0.92);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(12px);
-      position: sticky;
-      top: 24px;
-      z-index: 6;
-    }
-    .map-toolbar-group {
-      display: flex;
-      align-items: center;
       gap: 8px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
     }
-    .map-toolbar button,
-    .map-toolbar a {
+    .controls-card button {
       margin: 0;
       border-radius: 10px;
       padding: 7px 12px;
@@ -90,10 +199,6 @@
       font-weight: 600;
       font-size: 0.85rem;
       cursor: pointer;
-      text-decoration: none;
-    }
-    .map-toolbar-group.is-end {
-      margin-left: auto;
     }
 
     /* Flat column — the section blocks are the cards, no card-in-card. */
@@ -665,17 +770,48 @@
       #map {
         min-height: 56vh;
       }
-      .map-toolbar {
-        position: relative;
-        top: 0;
+      .topbar {
+        padding: 10px 12px 10px 16px;
+        gap: 10px;
+      }
+      .topbar-nav {
+        gap: 10px;
       }
     }
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <span class="topbar-stripe"></span>
+    <div class="topbar-brand">
+      <span class="topbar-mark">DM</span>
+      <span class="topbar-title">MeshCore Triangulator</span>
+    </div>
+    <nav class="topbar-nav">
+      <details class="topbar-dropdown">
+        <summary>Dutch MeshCore</summary>
+        <div class="topbar-dropdown-menu">
+          <a href="https://dutchmeshcore.nl/#home" target="_blank" rel="noopener">Home</a>
+          <a href="https://dutchmeshcore.nl/#cluster" target="_blank" rel="noopener">MQTT Cluster</a>
+          <a href="https://portal.dutchmeshcore.nl" target="_blank" rel="noopener">Portal</a>
+          <a href="https://toolbox.dutchmeshcore.nl/" target="_blank" rel="noopener">Toolbox</a>
+          <a href="https://observers.dutchmeshcore.nl/" target="_blank" rel="noopener">Observer Stats</a>
+          <a href="https://settings.dutchmeshcore.nl/" target="_blank" rel="noopener">NL Mesh Settings</a>
+          <a href="https://discord.dutchmeshcore.nl" target="_blank" rel="noopener">Discord</a>
+        </div>
+      </details>
+      <a href="https://mesh-hunter.eu/" target="_blank" rel="noopener">Mesh-Hunter ↗</a>
+      <a href="https://mc-radar.woodwar.com" target="_blank" rel="noopener">MC-Radar ↗</a>
+    </nav>
+    <a class="topbar-github" href="https://github.com/khagele/meshcore-triangulator" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
   <main class="shell">
     <section class="panel">
       <div class="input-stack">
+        <div class="controls-card">
+          <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
+          <button id="open-3d-button" type="button" class="button-secondary">3D View</button>
+        </div>
         <section class="step-panel is-locked" id="panel-discovery">
           <span class="step-kicker">Step 1</span>
           <h3>Clues + Regions</h3>
@@ -719,15 +855,6 @@
     </section>
 
     <div class="map-col">
-      <div class="map-toolbar">
-        <div class="map-toolbar-group">
-          <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
-          <button id="open-3d-button" type="button" class="button-secondary">3D View</button>
-        </div>
-        <div class="map-toolbar-group is-end">
-          <a href="https://github.com/khagele/meshcore-triangulator" target="_blank" rel="noopener" class="button-muted">GitHub ↗</a>
-        </div>
-      </div>
       <section class="map-wrap">
         <div id="map" aria-label="Map showing repeater locations"></div>
         <div id="map3d-overlay" hidden>

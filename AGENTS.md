@@ -9,14 +9,13 @@
 Localises MeshCore repeaters/nodes/traffic sources from mesh topology (who heard what, from
 where), using RSSI/SNR-weighted clustering rather than GPS tracking of the target.
 
-Two components:
+This repo contains **`web-standalone/`** — self-contained, no database. Resolves a node live
+against the public mc-radar / map.meshcore.io feeds. This is the actively developed, deployed
+component (live at [triangulator.dutchmeshcore.nl](https://triangulator.dutchmeshcore.nl/)).
 
-1. **`web-standalone/`** — self-contained, no database. Resolves a node live against the public
-   mc-radar / map.meshcore.io feeds. This is the actively developed, deployed component
-   (live at [triangulator.dutchmeshcore.nl](https://triangulator.dutchmeshcore.nl/)).
-2. **`nuc-full/`** — the full system: MQTT collector building a local observations database,
-   hourly export, GPS-track "movers" view, node/target dashboards, systemd services. Only
-   relevant if taking over the data-collection pipeline, not just the map.
+The full data-collection pipeline (MQTT collector, local observations database, hourly export,
+GPS-track "movers" view, systemd services) lives in a **separate private repo** — ask Kasper if
+you need it.
 
 ---
 
@@ -32,18 +31,6 @@ web-standalone/         Self-contained map tool (no DB)
   Dockerfile            Alpine, non-root, stdlib-only
   docker-compose.yml    App + cloudflared sidecar, hardened (read-only rootfs, cap_drop ALL)
   .env.example           TUNNEL_TOKEN, optional image override
-
-nuc-full/                Full pipeline (MQTT collector + DB + systemd services)
-  collector.py           MQTT ingest → SQLite observations DB
-  meshcore_decoder.py    Raw MeshCore ADVERT packet decoder (empirically-verified byte layout)
-  locate.py               Core triangulation: clue parsing, clustering, weighted estimate, terrain refine
-  track_locate.py / calibrate_track.py   GPS-track "movers" support
-  export_triangulator.py  Hourly export job
-  targets.py / prune_db.py  Dashboards / DB maintenance
-  *.service / *.timer     systemd units (see DEPLOY.md, install.sh)
-  config.example.ini      Template — copy to config.ini, fill in MQTT broker creds (gitignored)
-  web/                    Same map UI as web-standalone, plus DB-backed features
-    verified_positions.json  Operator-confirmed ground-truth anchors
 ```
 
 ---
@@ -53,12 +40,9 @@ nuc-full/                Full pipeline (MQTT collector + DB + systemd services)
 | Layer | Technology |
 |---|---|
 | Web UI | Vanilla JS, Leaflet 1.9.4, plain CSS with `:root` custom-property tokens — no build step |
-| Web server / proxy | Python 3.7+ stdlib only (`http.server`) — nothing to install for `web-standalone/` |
-| Collector / triangulation (`nuc-full/`) | Python, `paho-mqtt`, `numpy`, `scipy`; optional `rasterio` for terrain mode |
-| Storage (`nuc-full/`) | SQLite, no ORM |
+| Web server / proxy | Python 3.7+ stdlib only (`http.server`) — nothing to install |
 | Container | Docker (Alpine, non-root), multi-arch GHA build → GHCR |
-| Deploy | Cloudflare Tunnel (`web-standalone`) or systemd services (`nuc-full`) |
-| MQTT broker | Whatever broker `config.ini` points at (dutchmeshcore.nl broker for the existing collector) |
+| Deploy | Cloudflare Tunnel |
 
 ---
 
@@ -73,25 +57,16 @@ python3 server.py          # http://127.0.0.1:8000 — nothing to install
 
 Or via Docker — see the root README's Docker quick-start section.
 
-### `nuc-full/`
-
-```bash
-cd nuc-full
-pip install -r requirements.txt
-cp config.example.ini config.ini   # fill in your MQTT broker details; gitignored, never commit
-python3 collector.py               # or deploy via install.sh / the systemd units
-```
-
 ### Tests
 
 There is no automated test suite yet. Going forward:
 
 - **Do** add unit tests (pytest) for new *pure logic* — clustering, weighted-estimate math,
-  clue parsing, coordinate/terrain calculations (the kind of code in `locate.py`,
-  `meshcore_decoder.py`). Keep such logic in small, importable functions so it stays testable.
+  clue parsing, coordinate/terrain calculations. Keep such logic in small, importable functions
+  so it stays testable.
 - **Don't** retrofit tests onto existing untested code as a prerequisite for unrelated changes,
-  and don't write tests for I/O/glue code (`server.py`, `collector.py`, `index.html`'s DOM/map
-  wiring) — verify those by running them and checking behaviour manually.
+  and don't write tests for I/O/glue code (`server.py`, `index.html`'s DOM/map wiring) — verify
+  those by running them and checking behaviour manually.
 - Before claiming a change done: run it (`python3 server.py` + load the page, or the relevant
   script) and confirm the actual behaviour, not just that it doesn't error at import time.
 
@@ -105,9 +80,8 @@ Before starting a new feature or fix, open a GitHub issue for it:
 
 > **problem or feature → issue → PR**
 
-Write down the problem or feature and why it matters, expected behaviour, which component it
-touches (`web-standalone` / `nuc-full`), and any repro steps/context. If a request is
-underspecified, ask for the missing details before starting.
+Write down the problem or feature and why it matters, expected behaviour, and any repro
+steps/context. If a request is underspecified, ask for the missing details before starting.
 
 Link the PR back with a closing keyword (`Closes #<n>`) so merging auto-closes the issue.
 
@@ -149,7 +123,7 @@ One commit per logical change. Conventional commit style is fine but not strictl
 
 ```
 feat(web-standalone): add GitHub link to map toolbar
-fix(nuc-full): handle empty MQTT payload in collector
+fix(web-standalone): handle empty upstream response in proxy
 docs: update AGENTS.md
 ```
 
@@ -159,15 +133,14 @@ docs: update AGENTS.md
 
 ### MeshCore packet layout is empirically verified — never guess
 
-`nuc-full/meshcore_decoder.py`'s header documents the ADVERT packet byte layout as *verified
-against real packets*. If you're touching packet decoding and a field's layout isn't confirmed,
-don't guess — leave it undecoded and say so in a comment, matching the existing style.
+Where packet byte layouts are documented as *verified against real packets*, treat them as
+such. If you're touching packet decoding and a field's layout isn't confirmed, don't guess —
+leave it undecoded and say so in a comment, matching the existing style.
 
 ### No secrets in the repo
 
-`nuc-full/config.ini` and `web-standalone/.env` are gitignored. Never commit broker URLs,
-passwords, or tokens. Scrub infrastructure detail (hostnames, IPs) before publishing docs or
-commit messages.
+`web-standalone/.env` is gitignored. Never commit broker URLs, passwords, or tokens. Scrub
+infrastructure detail (hostnames, IPs) before publishing docs or commit messages.
 
 ### Colours via the existing CSS custom properties
 

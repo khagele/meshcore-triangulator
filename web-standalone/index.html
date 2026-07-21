@@ -1061,10 +1061,13 @@
 
     // Assisted de-duplication: a prefix (2-hex shortId) can resolve to several
     // real nodes. For triangulation each prefix should contribute once, so we
-    // keep the instance nearest the cluster centre (the spurious far duplicate
-    // is what blows up the zoom). Tiebreak on proven-link count. Returns the
-    // kept nodes plus the removed duplicates (for review in the editor).
-    function dedupeByPrefix(nodes, centroid) {
+    // keep the instance with real proven-link evidence (an actual confirmed
+    // mesh connection) over one without; among equally-evidenced (or equally
+    // un-evidenced) candidates, keep the one nearest the cluster centre (the
+    // spurious far duplicate is what blows up the zoom), tiebreak on the
+    // upstream-reported link_count. Returns the kept nodes plus the removed
+    // duplicates (for review in the editor).
+    function dedupeByPrefix(nodes, centroid, provenNodeIds = new Set()) {
       const groups = new Map();
       nodes.forEach((node) => {
         const key = String(obsPrefix(node) || nodeId(node)).toLowerCase();
@@ -1076,6 +1079,9 @@
       groups.forEach((group) => {
         if (group.length === 1) { kept.push(group[0]); return; }
         const sorted = group.slice().sort((a, b) => {
+          const aProven = provenNodeIds.has(nodeId(a)) ? 1 : 0;
+          const bProven = provenNodeIds.has(nodeId(b)) ? 1 : 0;
+          if (aProven !== bProven) return bProven - aProven;
           const da = haversineKm(centroid, a);
           const db = haversineKm(centroid, b);
           if (Math.abs(da - db) > 0.001) return da - db;
@@ -1085,6 +1091,28 @@
         removed.push(...sorted.slice(1));
       });
       return { kept, removed };
+    }
+
+    // Interleave nodes round-robin by prefix (instead of raw API/response
+    // order) so a proven-link fetch budget capped at N nodes doesn't let one
+    // prefix's duplicates crowd out other prefixes.
+    function roundRobinByPrefix(nodes) {
+      const groups = new Map();
+      nodes.forEach((node) => {
+        const key = obsPrefix(node);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(node);
+      });
+      const buckets = Array.from(groups.values());
+      const ordered = [];
+      let i = 0;
+      while (ordered.length < nodes.length) {
+        buckets.forEach((bucket) => {
+          if (i < bucket.length) ordered.push(bucket[i]);
+        });
+        i++;
+      }
+      return ordered;
     }
 
     function provenLinkId(link) {
@@ -1789,6 +1817,14 @@
       }
       const baseMatches = lockedObserverPool.length ? lockedObserverPool : (currentResolvedContext.matches || []);
       const activeById = new Map(currentMatchedNodes.map((node) => [nodeId(node), node.weight || 1]));
+      // Fallback weight for a not-yet-active duplicate: inherit from whichever
+      // duplicate of the same prefix is currently active, so switching which
+      // duplicate represents a prefix doesn't silently reset its weight to 1.
+      const weightByPrefix = new Map();
+      currentMatchedNodes.forEach((node) => {
+        const pfx = obsPrefix(node);
+        if (!weightByPrefix.has(pfx)) weightByPrefix.set(pfx, node.weight || 1);
+      });
       observerEditor.innerHTML = "";
       const buildObserverRow = (node) => {
         const id = nodeId(node);
@@ -1796,6 +1832,7 @@
         const reason = !checked ? observerExclusionReasons.get(id) : null;
         const reasonClass = reason === "proven-link (range only)" ? "observer-reason is-range" : "observer-reason";
         const pfx = obsPrefix(node);
+        const weight = activeById.has(id) ? activeById.get(id) : (weightByPrefix.get(pfx) ?? 1);
         const row = document.createElement("div");
         row.className = checked ? "observer-row" : "observer-row is-excluded";
         row.innerHTML = `
@@ -1805,7 +1842,7 @@
             <span>${node.lat.toFixed(5)}, ${node.lon.toFixed(5)}${Number.isFinite(node.provenRadiusKm) ? ` · ${node.provenRadiusKm.toFixed(1)} km` : ""}</span>
             ${reason ? `<span class="${reasonClass}">${reason}</span>` : ""}
           </div>
-          <input class="observer-weight" type="number" min="0" step="0.05" value="${(activeById.get(id) || 1).toFixed(2)}" data-nodeid="${id}" data-prefix="${pfx}">
+          <input class="observer-weight" type="number" min="0" step="0.05" value="${weight.toFixed(2)}" data-nodeid="${id}" data-prefix="${pfx}">
         `;
         return row;
       };
@@ -1938,7 +1975,8 @@
       const clusterKeys = new Set(clusterNodes.map((node) => node.public_key || node.key));
       const supportNodeMap = new Map();
       const provenLinks = [];
-      await Promise.all(clusterNodes.slice(0, 8).map(async (node) => {
+      const fetchOrder = roundRobinByPrefix(clusterNodes);
+      await Promise.all(fetchOrder.slice(0, 8).map(async (node) => {
         try {
           const connections = await fetchMcRadarConnections(node.public_key || node.key);
           const usable = connections.filter((connection) => connection.confidence >= 85).slice(0, 8);
@@ -1989,11 +2027,17 @@
       lockedObserverPool = Array.from(observerPoolMap.values());
       currentProvenLinks = provenLinks;
 
-      // Assisted de-duplication: keep one node per prefix (nearest the cluster
-      // centre) so duplicates don't skew the estimate or the zoom. Removed
-      // duplicates stay in the observer pool, shown unchecked for review.
+      // Assisted de-duplication: keep one node per prefix (proven-link
+      // evidence first, then nearest the cluster centre) so duplicates don't
+      // skew the estimate or the zoom. Removed duplicates stay in the
+      // observer pool, shown unchecked for review.
       const centroid = centroidOfNodes(clusterNodes);
-      const { kept: dedupedNodes, removed: dupRemoved } = dedupeByPrefix(clusterNodes, centroid);
+      const provenNodeIds = new Set();
+      provenLinks.forEach((link) => {
+        provenNodeIds.add(nodeId(link.from));
+        provenNodeIds.add(nodeId(link.to));
+      });
+      const { kept: dedupedNodes, removed: dupRemoved } = dedupeByPrefix(clusterNodes, centroid, provenNodeIds);
 
       // Record why pool nodes are unchecked by default, for the editor.
       observerExclusionReasons = new Map();

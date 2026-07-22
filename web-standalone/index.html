@@ -200,6 +200,27 @@
       font-size: 0.85rem;
       cursor: pointer;
     }
+    /* 3D View is a toggle, not a one-way "open" (#29): the same control
+       enters and exits the mode, so it needs a visible pressed state. */
+    .controls-card button[aria-pressed="true"] {
+      background: rgba(0, 184, 148, 0.16);
+      border-color: rgba(0, 184, 148, 0.55);
+      color: var(--accent);
+    }
+    /* Meta/product actions (changelog) sit apart from the map actions so
+       they don't read as part of the Step 1-3 task flow. */
+    .controls-card .whats-new {
+      margin-left: auto;
+    }
+    .controls-card button.is-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      line-height: 1;
+    }
 
     /* "What's new" changelog (#22): unread dot on the button, dropdown panel
        positioned relative to the wrapper. */
@@ -219,7 +240,9 @@
     .whats-new-panel {
       position: absolute;
       top: calc(100% + 8px);
-      left: 0;
+      /* Anchored right: the trigger is right-aligned in the controls card
+         (#29), so opening leftward keeps the panel inside the column. */
+      right: 0;
       z-index: 20;
       width: min(300px, 80vw);
       max-height: 360px;
@@ -820,48 +843,6 @@
       position: absolute;
       inset: 0;
     }
-    #map3d-bar {
-      position: absolute;
-      top: 14px;
-      left: 14px;
-      right: 14px;
-      z-index: 2001;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 8px 12px;
-      border-radius: 12px;
-      background: rgba(7, 17, 24, 0.82);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      backdrop-filter: blur(8px);
-      color: var(--text);
-      font-size: 0.85rem;
-    }
-    .map3d-actions {
-      display: flex;
-      gap: 8px;
-      flex: 0 0 auto;
-    }
-    #close-3d-button,
-    #estimate-3d-button {
-      padding: 6px 12px;
-      border-radius: 10px;
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--text);
-      font: inherit;
-      cursor: pointer;
-    }
-    #estimate-3d-button {
-      border-color: rgba(155, 229, 100, 0.5);
-      background: rgba(155, 229, 100, 0.16);
-      color: #cdebb0;
-    }
-    #close-3d-button:hover,
-    #estimate-3d-button:hover {
-      background: rgba(255, 255, 255, 0.16);
-    }
 
     @media (max-width: 860px) {
       .shell {
@@ -926,10 +907,10 @@
       <div class="input-stack">
         <div class="controls-card">
           <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
-          <button id="open-3d-button" type="button" class="button-secondary">3D View</button>
+          <button id="open-3d-button" type="button" class="button-secondary" aria-pressed="false">3D View</button>
           <div class="whats-new">
-            <button id="whats-new-button" type="button" class="button-muted" aria-label="What's new" aria-haspopup="dialog">
-              What's New<span id="whats-new-dot" class="whats-new-dot" hidden></span>
+            <button id="whats-new-button" type="button" class="button-muted is-icon" aria-label="What's new" aria-haspopup="dialog" title="What's new">
+              <span aria-hidden="true">🔔</span><span id="whats-new-dot" class="whats-new-dot" hidden></span>
             </button>
             <div id="whats-new-panel" class="whats-new-panel" role="dialog" aria-label="What's new" hidden>
               <div id="whats-new-list"></div>
@@ -982,13 +963,6 @@
         <div id="map" aria-label="Map showing repeater locations"></div>
         <div id="map3d-overlay" hidden>
           <div id="map3d"></div>
-          <div id="map3d-bar">
-            <span id="map3d-status">3D view — observers, range polygons and the estimate over 3D buildings.</span>
-            <span class="map3d-actions">
-              <button id="estimate-3d-button" type="button">Estimate Unknown Node</button>
-              <button id="close-3d-button" type="button">2D ✕</button>
-            </span>
-          </div>
         </div>
       </section>
     </div>
@@ -2659,6 +2633,9 @@
     }
 
     function clearMapState() {
+      // Clearing the map should clear the 3D view too — otherwise it lingers
+      // showing observers that no longer exist (#29).
+      close3DView();
       resetResolvedState(true);
       discoverStatus.textContent = "Map cleared. Step 1: enter clues, then find candidate clusters.";
       renderParsedClues(parseWeightedPrefixes(prefixInput.value));
@@ -2784,9 +2761,7 @@
 
     // ── 3D view (MapLibre + OpenFreeMap, free, no key) ──────────────────────
     const open3dButton = document.getElementById("open-3d-button");
-    const close3dButton = document.getElementById("close-3d-button");
     const map3dOverlay = document.getElementById("map3d-overlay");
-    const map3dStatus = document.getElementById("map3d-status");
     let map3d = null;
     let maplibreLoading = null;
 
@@ -2946,7 +2921,9 @@
 
     function go3dPerspective() {
       if (map3d) map3d.easeTo({ pitch: 60, bearing: -20, duration: 1100 });
-      if (map3dStatus) map3dStatus.textContent = `3D — ${currentMatchedNodes.length} observers, estimate in perspective.`;
+      // No status write here (#29): this runs right after runObserverEstimate
+      // has put the located coordinates in terrainStatus, and narrating the
+      // 3D tilt would overwrite the actual answer.
     }
 
     // perspective=false → load flat (top-down). perspective=true → tilt in.
@@ -2956,8 +2933,15 @@
         return;
       }
       map3dOverlay.hidden = false;
+      sync3dToggle();
       try { await loadMaplibre(); }
-      catch (e) { if (map3dStatus) map3dStatus.textContent = "MapLibre could not load (no internet?)."; return; }
+      catch (e) {
+        // Don't strand the user on a blank overlay: back out of 3D and say
+        // why in Step 3's status line (#29).
+        close3DView();
+        terrainStatus.textContent = "MapLibre could not load (no internet?).";
+        return;
+      }
       // Reuse the existing flat map: just refresh data and (optionally) tilt.
       if (map3d) {
         map3d.resize();
@@ -2977,23 +2961,31 @@
         add3dLayers();
         const b = bounds3d();
         if (b) map3d.fitBounds(b, { padding: 90, pitch: 0, bearing: 0, maxZoom: 16, duration: 0 });
-        if (perspective) {
-          go3dPerspective();
-        } else if (map3dStatus) {
-          map3dStatus.textContent = `3D (flat) — ${currentMatchedNodes.length} observers. Click "Estimate Unknown Node" for perspective.`;
-        }
+        if (perspective) go3dPerspective();
       });
     }
 
     function close3DView() {
       if (map3dOverlay) map3dOverlay.hidden = true;
       if (map3d) { map3d.remove(); map3d = null; }
+      sync3dToggle();
     }
 
-    const estimate3dButton = document.getElementById("estimate-3d-button");
-    if (open3dButton) open3dButton.addEventListener("click", () => open3DView(false));
-    if (close3dButton) close3dButton.addEventListener("click", close3DView);
-    if (estimate3dButton) estimate3dButton.addEventListener("click", runObserverEstimate);
+    // The 3D control is a single toggle (#29) — keep its pressed state and
+    // label in step with whether the overlay is actually open.
+    function sync3dToggle() {
+      if (!open3dButton) return;
+      const open = !!(map3dOverlay && !map3dOverlay.hidden);
+      open3dButton.setAttribute("aria-pressed", open ? "true" : "false");
+      open3dButton.textContent = open ? "Exit 3D" : "3D View";
+    }
+
+    if (open3dButton) {
+      open3dButton.addEventListener("click", () => {
+        if (map3dOverlay && !map3dOverlay.hidden) close3DView();
+        else open3DView(false);
+      });
+    }
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && map3dOverlay && !map3dOverlay.hidden) close3DView(); });
 
     // Deep-link support (#10): ?prefixes=db:30,23&prefixes2=a0:8,fc&hop2=10&cluster=6

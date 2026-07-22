@@ -699,6 +699,56 @@
       background: rgba(225, 29, 72, 0.28);
     }
 
+    /* Deep-link auto-discovery splash (#26): a visitor arriving via a
+       shared link didn't click anything themselves, so the usual status-text
+       feedback is easy to miss — show this instead while that first
+       auto-triggered discovery is in flight. Fixed over the whole viewport
+       (not scoped to the map, which sits below Step 1/2/3 on load) so it's
+       visible immediately regardless of scroll position or screen size. */
+    #deep-link-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 5000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7, 17, 24, 0.55);
+      backdrop-filter: blur(2px);
+    }
+    .deep-link-splash-card {
+      width: min(260px, 80%);
+      padding: 20px;
+      border-radius: 20px;
+      background: rgba(7, 25, 35, 0.96);
+      border: 1px solid rgba(143, 187, 201, 0.18);
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+    .deep-link-spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 12px;
+      border-radius: 50%;
+      border: 3px solid rgba(0, 184, 148, 0.2);
+      border-top-color: var(--accent);
+      animation: deep-link-spin 0.8s linear infinite;
+    }
+    @keyframes deep-link-spin {
+      to { transform: rotate(360deg); }
+    }
+    .deep-link-splash-card p {
+      margin: 0;
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .deep-link-splash-card p.deep-link-splash-sub {
+      margin-top: 6px;
+      font-size: 0.72rem;
+      font-weight: 400;
+      color: var(--muted);
+    }
+
     #map3d-overlay {
       position: absolute;
       inset: 10px;
@@ -781,6 +831,13 @@
   </style>
 </head>
 <body>
+  <div id="deep-link-splash" hidden>
+    <div class="deep-link-splash-card">
+      <div class="deep-link-spinner"></div>
+      <p>Loading your shared link…</p>
+      <p class="deep-link-splash-sub">Resolving prefixes and finding the best matching region</p>
+    </div>
+  </div>
   <div class="topbar">
     <span class="topbar-stripe"></span>
     <div class="topbar-brand">
@@ -878,6 +935,7 @@
   <script>
     const discoverButton = document.getElementById("discover-button");
     const clearMapButton = document.getElementById("clear-map-button");
+    const deepLinkSplash = document.getElementById("deep-link-splash");
     const discoverStatus = document.getElementById("discover-status");
     const clusterStatus = document.getElementById("cluster-status");
     const candidateList = document.getElementById("candidate-list");
@@ -2484,6 +2542,7 @@
         if (runId === discoveryRunId) {
           discoverButton.disabled = false;
         }
+        if (deepLinkSplash) deepLinkSplash.hidden = true;
         syncControlStates();
       }
     }
@@ -2886,7 +2945,10 @@
 
     const deepLinked = applyDeepLinkParams();
     applyPrefixInput();
-    if (deepLinked) discoverButton.click();
+    if (deepLinked) {
+      if (deepLinkSplash) deepLinkSplash.hidden = false;
+      discoverButton.click();
+    }
   </script>
 </body>
 </html>

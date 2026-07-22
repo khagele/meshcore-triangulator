@@ -201,6 +201,59 @@
       cursor: pointer;
     }
 
+    /* "What's new" changelog (#22): unread dot on the button, dropdown panel
+       positioned relative to the wrapper. */
+    .whats-new {
+      position: relative;
+      display: inline-block;
+    }
+    .whats-new-dot {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-2);
+    }
+    .whats-new-panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      z-index: 20;
+      width: min(300px, 80vw);
+      max-height: 360px;
+      overflow-y: auto;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(7, 25, 35, 0.97);
+      border: 1px solid rgba(143, 187, 201, 0.18);
+      box-shadow: var(--shadow);
+    }
+    .whats-new-entry {
+      padding: 8px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .whats-new-entry:first-child {
+      border-top: none;
+    }
+    .whats-new-entry time {
+      display: block;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .whats-new-entry strong {
+      display: block;
+      margin: 2px 0;
+      font-size: 0.88rem;
+    }
+    .whats-new-entry p {
+      margin: 0;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
     /* Flat column — the section blocks are the cards, no card-in-card. */
     .panel {
       padding: 0;
@@ -811,6 +864,14 @@
         <div class="controls-card">
           <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
           <button id="open-3d-button" type="button" class="button-secondary">3D View</button>
+          <div class="whats-new">
+            <button id="whats-new-button" type="button" class="button-muted" aria-label="What's new" aria-haspopup="dialog">
+              What's New<span id="whats-new-dot" class="whats-new-dot" hidden></span>
+            </button>
+            <div id="whats-new-panel" class="whats-new-panel" role="dialog" aria-label="What's new" hidden>
+              <div id="whats-new-list"></div>
+            </div>
+          </div>
         </div>
         <section class="step-panel is-locked" id="panel-discovery">
           <span class="step-kicker">Step 1</span>
@@ -878,6 +939,10 @@
   <script>
     const discoverButton = document.getElementById("discover-button");
     const clearMapButton = document.getElementById("clear-map-button");
+    const whatsNewButton = document.getElementById("whats-new-button");
+    const whatsNewDot = document.getElementById("whats-new-dot");
+    const whatsNewPanel = document.getElementById("whats-new-panel");
+    const whatsNewList = document.getElementById("whats-new-list");
     const discoverStatus = document.getElementById("discover-status");
     const clusterStatus = document.getElementById("cluster-status");
     const candidateList = document.getElementById("candidate-list");
@@ -2887,6 +2952,49 @@
     const deepLinked = applyDeepLinkParams();
     applyPrefixInput();
     if (deepLinked) discoverButton.click();
+
+    // "What's new" changelog (#22): loads web-standalone/changelog.json,
+    // shows an unread dot until the panel has been opened once for the
+    // latest entry (tracked in localStorage), same pattern documented for
+    // sibling sites in docs/changelog-widget-guide.md.
+    (async function initWhatsNew() {
+      if (!whatsNewButton) return;
+      const SEEN_KEY = "changelog:lastSeenId";
+      let entries = [];
+      try {
+        entries = await fetch("changelog.json").then((r) => r.json());
+      } catch (error) {
+        whatsNewButton.hidden = true;
+        return;
+      }
+      function renderEntries() {
+        whatsNewList.innerHTML = entries.map((e) => `
+          <div class="whats-new-entry">
+            <time>${e.date}</time>
+            <strong>${e.title}</strong>
+            <p>${e.body}</p>
+          </div>
+        `).join("");
+      }
+      function updateDot() {
+        const lastSeen = localStorage.getItem(SEEN_KEY);
+        whatsNewDot.hidden = !entries.length || entries[0].id === lastSeen;
+      }
+      whatsNewButton.addEventListener("click", () => {
+        whatsNewPanel.hidden = !whatsNewPanel.hidden;
+        if (!whatsNewPanel.hidden) {
+          renderEntries();
+          if (entries.length) localStorage.setItem(SEEN_KEY, entries[0].id);
+          updateDot();
+        }
+      });
+      document.addEventListener("click", (e) => {
+        if (!whatsNewPanel.hidden && !whatsNewPanel.contains(e.target) && e.target !== whatsNewButton) {
+          whatsNewPanel.hidden = true;
+        }
+      });
+      updateDot();
+    })();
   </script>
 </body>
 </html>

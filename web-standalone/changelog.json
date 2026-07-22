@@ -1,0 +1,38 @@
+[
+  {
+    "id": "2026-07-22-deep-linking",
+    "date": "2026-07-22",
+    "title": "Shareable links",
+    "body": "Step 1 can now be pre-filled from a URL, so other sites can link straight into a result instead of a blank form."
+  },
+  {
+    "id": "2026-07-22-hull-cluster",
+    "date": "2026-07-22",
+    "title": "Smarter clustering",
+    "body": "Repeaters heard through a relay (2nd-hop) are now included based on real network links where available, not just a flat guessed range."
+  },
+  {
+    "id": "2026-07-21-duplicate-weight",
+    "date": "2026-07-21",
+    "title": "Duplicate-node fix",
+    "body": "Switching between duplicate nodes for the same prefix no longer silently resets the weight you'd set."
+  },
+  {
+    "id": "2026-07-21-topbar",
+    "date": "2026-07-21",
+    "title": "New top bar",
+    "body": "Added a Dutch MeshCore-branded top bar with links to the community site, Mesh-Hunter, MC-Radar, and this project's GitHub."
+  },
+  {
+    "id": "2026-07-20-cluster-default",
+    "date": "2026-07-20",
+    "title": "Tighter default search radius",
+    "body": "Cluster search radius now defaults to 6km instead of 50km, matching typical real-world repeater density."
+  },
+  {
+    "id": "2026-07-19-docker",
+    "date": "2026-07-19",
+    "title": "Docker deploy",
+    "body": "One-command deploy via Docker Compose with a built-in Cloudflare Tunnel sidecar."
+  }
+]

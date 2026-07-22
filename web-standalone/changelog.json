@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-07-22-map-controls",
+    "date": "2026-07-22",
+    "title": "Cleaner map controls",
+    "body": "Buttons no longer float on top of the map. Clear Map and the 3D toggle now sit together above Step 1."
+  },
+  {
     "id": "2026-07-22-deep-linking",
     "date": "2026-07-22",
     "title": "Shareable links",

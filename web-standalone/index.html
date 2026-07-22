@@ -2866,7 +2866,27 @@
     if (estimate3dButton) estimate3dButton.addEventListener("click", runObserverEstimate);
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && map3dOverlay && !map3dOverlay.hidden) close3DView(); });
 
+    // Deep-link support (#10): ?prefixes=db:30,23&prefixes2=a0:8,fc&hop2=10&cluster=6
+    // pre-fills Step 1 from the URL so external sites can link straight into a
+    // query. Auto-runs discovery when `prefixes` is present, so the link lands
+    // the visitor on a live result rather than just a pre-filled form.
+    function applyDeepLinkParams() {
+      const params = new URLSearchParams(window.location.search);
+      const prefixes = params.get("prefixes");
+      if (!prefixes) return false;
+      prefixInput.value = prefixes;
+      const prefixes2 = params.get("prefixes2");
+      if (prefixes2 && prefix2Input) prefix2Input.value = prefixes2;
+      const hop2 = Number.parseFloat(params.get("hop2"));
+      if (Number.isFinite(hop2) && hop2 > 0 && hop2RadiusInput) hop2RadiusInput.value = String(hop2);
+      const cluster = Number.parseFloat(params.get("cluster"));
+      if (Number.isFinite(cluster) && cluster > 0 && regionRadiusInput) regionRadiusInput.value = String(cluster);
+      return true;
+    }
+
+    const deepLinked = applyDeepLinkParams();
     applyPrefixInput();
+    if (deepLinked) discoverButton.click();
   </script>
 </body>
 </html>

@@ -213,10 +213,10 @@
       gap: 12px;
     }
 
-    /* Step 1: three radii on one compact row. */
+    /* Step 1: two radii on one compact row. */
     .radius-row {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 8px;
       margin: 4px 0 2px;
     }
@@ -823,8 +823,7 @@
             <input id="prefix2-input" type="text" value="" placeholder="a0:8, fc">
             <p id="prefix2-status" class="hint">Weaker, wider clue. Down-weighted automatically.</p>
             <div class="radius-row">
-              <label>1st-hop km<input id="hop1-radius-input" type="number" min="1" max="100" step="1" value="10"></label>
-              <label>2nd-hop km<input id="hop2-radius-input" type="number" min="1" max="200" step="1" value="25"></label>
+              <label>2nd-hop km<input id="hop2-radius-input" type="number" min="1" max="200" step="1" value="10"></label>
               <label>Cluster km<input id="region-radius-input" type="number" min="1" max="200" step="1" value="6"></label>
             </div>
             <button id="discover-button" type="button">Find Best Matching Region</button>
@@ -896,7 +895,6 @@
     const prefixInput = document.getElementById("prefix-input");
     const prefixStatus = document.getElementById("prefix-status");
     const prefix2Input = document.getElementById("prefix2-input");
-    const hop1RadiusInput = document.getElementById("hop1-radius-input");
     const hop2RadiusInput = document.getElementById("hop2-radius-input");
     const panelDiscovery = document.getElementById("panel-discovery");
     const panelCluster = document.getElementById("panel-cluster");
@@ -907,14 +905,21 @@
     const DEFAULT_ANCHOR_RANGE_KM = 12;
     // Second-hop observers are one RF hop further from the source: weaker clue.
     const SECOND_HOP_WEIGHT_FACTOR = 0.3;
-    function hopRadiusKmFor(hop) {
-      const el = hop === 2 ? hop2RadiusInput : hop1RadiusInput;
-      const v = parseFloat(el && el.value);
-      return Number.isFinite(v) && v > 0 ? v : (hop === 2 ? 25 : 10);
+    // 1st-hop nodes have no fixed assumed range any more (removed, #15) — they
+    // fall through anchorRangeKm()'s provenRadiusKm / dynamic link_count
+    // fallback chain instead. This is 2nd-hop only.
+    function hop2RadiusKm() {
+      const v = parseFloat(hop2RadiusInput && hop2RadiusInput.value);
+      return Number.isFinite(v) && v > 0 ? v : 10;
     }
-    // Re-stamp each matched node's coverage radius from the current hop inputs.
+    // Re-stamp each matched node's coverage radius from the current hop
+    // input. 1st-hop nodes get hopRadiusKm cleared so they use the fallback
+    // chain in anchorRangeKm() instead of a stale fixed value.
     function applyHopRadii() {
-      currentMatchedNodes.forEach((n) => { n.hopRadiusKm = hopRadiusKmFor(n.hop || 1); });
+      currentMatchedNodes.forEach((n) => {
+        if ((n.hop || 1) === 2) n.hopRadiusKm = hop2RadiusKm();
+        else delete n.hopRadiusKm;
+      });
     }
     const elevationCache = new Map();
     const surfaceCache = new Map();
@@ -1242,6 +1247,108 @@
       return ordered;
     }
 
+    // --- Hull-shaped cluster region (#15) ---
+    // Planar km-projection around a reference point — accurate enough at
+    // cluster scale (a few tens of km), much simpler than spherical polygon
+    // geometry. Not used for anything requiring long-range accuracy.
+    function projectToLocalKm(node, refLat, refLon) {
+      const kmPerDegLat = 110.574;
+      const kmPerDegLon = 111.320 * Math.cos(refLat * Math.PI / 180);
+      return { x: (node.lon - refLon) * kmPerDegLon, y: (node.lat - refLat) * kmPerDegLat, node };
+    }
+
+    function crossProduct(o, a, b) {
+      return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    }
+
+    // Andrew's monotone chain convex hull. Returns hull points (CCW), or
+    // the input unchanged if it already has 2 or fewer points.
+    function convexHull(points) {
+      const pts = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+      if (pts.length <= 2) return pts;
+      const lower = [];
+      for (const p of pts) {
+        while (lower.length >= 2 && crossProduct(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+        lower.push(p);
+      }
+      const upper = [];
+      for (let i = pts.length - 1; i >= 0; i--) {
+        const p = pts[i];
+        while (upper.length >= 2 && crossProduct(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+        upper.push(p);
+      }
+      lower.pop();
+      upper.pop();
+      return lower.concat(upper);
+    }
+
+    function pointToSegmentDistance(p, a, b) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy;
+      let t = lenSq > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq : 0;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    }
+
+    function pointInPolygon(p, hull) {
+      let inside = false;
+      for (let i = 0, j = hull.length - 1; i < hull.length; j = i++) {
+        const xi = hull[i].x, yi = hull[i].y, xj = hull[j].x, yj = hull[j].y;
+        const intersect = ((yi > p.y) !== (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    // Distance in km from a (projected) point to a hull polygon: 0 if
+    // inside, else the shortest distance to any edge. Degenerate hulls
+    // (0/1/2 points — too few 1st-hop nodes for a real polygon) fall back to
+    // point/segment distance.
+    function distanceToHullKm(p, hull) {
+      if (hull.length === 0) return Infinity;
+      if (hull.length === 1) return Math.hypot(p.x - hull[0].x, p.y - hull[0].y);
+      if (hull.length === 2) return pointToSegmentDistance(p, hull[0], hull[1]);
+      if (pointInPolygon(p, hull)) return 0;
+      let min = Infinity;
+      for (let i = 0, j = hull.length - 1; i < hull.length; j = i++) {
+        min = Math.min(min, pointToSegmentDistance(p, hull[i], hull[j]));
+      }
+      return min;
+    }
+
+    // A 2nd-hop node's inclusion bound beyond the hull: prefer the p80 of its
+    // own proven-link distances (real evidence), falling back to hop2 km
+    // when it has none.
+    function secondHopBoundKm(node, provenLinks) {
+      const id = nodeId(node);
+      const dists = provenLinks
+        .filter((link) => nodeId(link.from) === id || nodeId(link.to) === id)
+        .map((link) => haversineKm(link.from, link.to));
+      const p80 = dists.length ? percentile(dists, 0.8) : null;
+      return Number.isFinite(p80) && p80 > 0 ? p80 : hop2RadiusKm();
+    }
+
+    // Filter a candidate's nodes to the hull-shaped region: 1st-hop nodes
+    // always pass (they define the hull); a 2nd-hop node passes if its
+    // distance to the (buffered) hull is within its own evidence-based
+    // bound. Returns the kept nodes plus the excluded ones (for review in
+    // the editor, same pattern as dedupeByPrefix's removed list).
+    function filterToHullShape(nodes, bufferKm, provenLinks) {
+      const hop1Nodes = nodes.filter((n) => (n.hop || 1) !== 2);
+      if (!hop1Nodes.length) return { kept: nodes.slice(), excluded: [] };
+      const refLat = hop1Nodes[0].lat, refLon = hop1Nodes[0].lon;
+      const hull = convexHull(hop1Nodes.map((n) => projectToLocalKm(n, refLat, refLon)));
+      const kept = [];
+      const excluded = [];
+      nodes.forEach((node) => {
+        if ((node.hop || 1) !== 2) { kept.push(node); return; }
+        const distKm = distanceToHullKm(projectToLocalKm(node, refLat, refLon), hull);
+        const bound = bufferKm + secondHopBoundKm(node, provenLinks);
+        if (distKm <= bound) kept.push(node); else excluded.push(node);
+      });
+      return { kept, excluded };
+    }
+
     function provenLinkId(link) {
       return `${nodeId(link.from)}->${nodeId(link.to)}`;
     }
@@ -1288,7 +1395,13 @@
       return weightedCoverage + (uniqueCoverage * 1.4) + linkBonus + (compactness * 8);
     }
 
-    function connectedComponents(nodesList, thresholdKm) {
+    // Hop-aware grouping (#15): the strict thresholdKm (Cluster km) applies
+    // between two 1st-hop nodes — that's what defines a region. An edge
+    // touching a 2nd-hop node is widened to wideThresholdKm (hop2 km) so a
+    // legitimately-relevant but farther-out 2nd-hop clue isn't dropped from
+    // the candidate before the hull-shaped refinement (activateCandidateRegion)
+    // ever gets a chance to evaluate it against real proven-link evidence.
+    function connectedComponents(nodesList, thresholdKm, wideThresholdKm = thresholdKm) {
       const visited = new Set();
       const components = [];
       nodesList.forEach((node, index) => {
@@ -1301,11 +1414,15 @@
         while (queue.length) {
           const currentIndex = queue.shift();
           componentIndexes.push(currentIndex);
+          const a = nodesList[currentIndex];
           nodesList.forEach((candidate, candidateIndex) => {
             if (visited.has(candidateIndex)) {
               return;
             }
-            if (haversineKm(nodesList[currentIndex], candidate) <= thresholdKm) {
+            const edgeThreshold = ((a.hop || 1) === 2 || (candidate.hop || 1) === 2)
+              ? Math.max(thresholdKm, wideThresholdKm)
+              : thresholdKm;
+            if (haversineKm(a, candidate) <= edgeThreshold) {
               visited.add(candidateIndex);
               queue.push(candidateIndex);
             }
@@ -1504,7 +1621,8 @@
     }
 
     function anchorRangeKm(anchor) {
-      // Explicit per-hop radius (first 10 km, second 25 km) drives the estimate.
+      // 2nd-hop nodes carry an explicit hopRadiusKm (#15). 1st-hop nodes
+      // don't any more — they fall through to provenRadiusKm / dynamic below.
       if (Number.isFinite(anchor.hopRadiusKm) && anchor.hopRadiusKm > 0) {
         return anchor.hopRadiusKm;
       }
@@ -2154,20 +2272,28 @@
       lockedObserverPool = Array.from(observerPoolMap.values());
       currentProvenLinks = provenLinks;
 
+      // Hull-shaped region (#15): the search-phase circular threshold
+      // (connectedComponents) is a rough net; now that we have this
+      // candidate's real nodes and proven links, narrow 2nd-hop nodes down
+      // to those actually within reach of the 1st-hop hull. 1st-hop nodes
+      // always pass — they define the hull.
+      const { kept: hullShapedNodes, excluded: hullExcluded } = filterToHullShape(clusterNodes, getRegionRadiusKm(), provenLinks);
+
       // Assisted de-duplication: keep one node per prefix (proven-link
       // evidence first, then nearest the cluster centre) so duplicates don't
       // skew the estimate or the zoom. Removed duplicates stay in the
       // observer pool, shown unchecked for review.
-      const centroid = centroidOfNodes(clusterNodes);
+      const centroid = centroidOfNodes(hullShapedNodes);
       const provenNodeIds = new Set();
       provenLinks.forEach((link) => {
         provenNodeIds.add(nodeId(link.from));
         provenNodeIds.add(nodeId(link.to));
       });
-      const { kept: dedupedNodes, removed: dupRemoved } = dedupeByPrefix(clusterNodes, centroid, provenNodeIds);
+      const { kept: dedupedNodes, removed: dupRemoved } = dedupeByPrefix(hullShapedNodes, centroid, provenNodeIds);
 
       // Record why pool nodes are unchecked by default, for the editor.
       observerExclusionReasons = new Map();
+      hullExcluded.forEach((node) => observerExclusionReasons.set(nodeId(node), "outside 1st-hop hull"));
       dupRemoved.forEach((node) => observerExclusionReasons.set(nodeId(node), "duplicate prefix"));
       supportNodes.filter((node) => isRepeaterLike(node)).forEach((node) => {
         const id = nodeId(node);
@@ -2192,10 +2318,13 @@
       candidateList.hidden = true;
       candidateList.innerHTML = "";
       changeClusterButton.hidden = false;
+      const hullNote = hullExcluded.length
+        ? ` ${hullExcluded.length} 2nd-hop node${hullExcluded.length === 1 ? "" : "s"} outside the 1st-hop hull excluded — review in the list below.`
+        : "";
       const dedupNote = dupRemoved.length
         ? ` Auto-removed ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"} (kept the one nearest the cluster centre) — review in the list below.`
         : "";
-      clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${dedupNote}`;
+      clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${hullNote}${dedupNote}`;
       syncClusterEditorFromLockedRegion();
       setDiscoveryCollapsed(true);
       renderCandidateMap([]);
@@ -2203,8 +2332,8 @@
       updateClueZone(dedupedNodes);
       // Zoom to the de-duplicated observers only (no far duplicates / support).
       fitMapToNodes(dedupedNodes);
-      discoverStatus.textContent = dupRemoved.length
-        ? `Cluster selected near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}. ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"} de-duplicated. Review the observers below, then lock with “Apply Inside Locked Cluster” and continue to Step 3.`
+      discoverStatus.textContent = (dupRemoved.length || hullExcluded.length)
+        ? `Cluster selected near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}.${hullNote}${dedupNote} Review the observers below, then lock with “Apply Inside Locked Cluster” and continue to Step 3.`
         : `Cluster locked near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)} with ${uniquePrefixCount(dedupedNodes)} observers. Step 3 is ready.`;
       terrainStatus.textContent = "Step 3 ready. Estimate the unknown node from these observers, then optionally refine with Terrain + LOS.";
       updateWorkflowSteps("done");
@@ -2262,9 +2391,11 @@
       discoverStatus.textContent = `Resolving prefixes with a ${radiusKm.toFixed(0)} km cluster radius...`;
       updateWorkflowSteps("discovery");
       const tagHop = (nodes, hop, wmap) => {
-        const radius = hopRadiusKmFor(hop);
         const factor = hop === 2 ? SECOND_HOP_WEIGHT_FACTOR : 1;
-        return nodes.map((node) => ({ ...node, hop, hopRadiusKm: radius, weight: (wmap.get(obsPrefix(node)) || 1) * factor }));
+        return nodes.map((node) => ({
+          ...node, hop, weight: (wmap.get(obsPrefix(node)) || 1) * factor,
+          ...(hop === 2 ? { hopRadiusKm: hop2RadiusKm() } : {})
+        }));
       };
       try {
         let matches = [];
@@ -2283,8 +2414,8 @@
             const factor = hop === 2 ? SECOND_HOP_WEIGHT_FACTOR : 1;
             return [{
               ...node, key: node.public_key || node.key, matchedPrefix: mp,
-              hop, hopRadiusKm: hopRadiusKmFor(hop),
-              weight: (wmap.get(mp) || 1) * factor, link_count: Number(node.link_count || 0)
+              hop, weight: (wmap.get(mp) || 1) * factor, link_count: Number(node.link_count || 0),
+              ...(hop === 2 ? { hopRadiusKm: hop2RadiusKm() } : {})
             }];
           });
           matches = [...pick(hop1, 1, w1), ...pick(hop2, 2, w2)];
@@ -2307,7 +2438,7 @@
           discoverStatus.textContent = `No nodes found for prefixes: ${allPrefixes.join(", ")}.`;
           return;
         }
-        const components = connectedComponents(matches, radiusKm)
+        const components = connectedComponents(matches, radiusKm, hop2RadiusKm())
           .map((component, index) => ({
             ...component,
             id: `cluster-${index + 1}`,

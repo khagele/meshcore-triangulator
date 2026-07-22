@@ -59,6 +59,32 @@ control in front if you do; the proxy has no auth of its own.
 | PDOK AHN | Terrain/surface elevation (NL). |
 | OpenFreeMap | 3D building tiles (no key). |
 
+### Deep-linking (for other sites/tools)
+
+External sites can link straight into a query via URL query parameters —
+useful if you're building a sibling tool (a spam detector, an incident page,
+a bot) and want a "locate this node" link that lands the visitor on a live
+result instead of a blank form.
+
+| Param | Required | Meaning |
+|---|---|---|
+| `prefixes` | yes | First-hop clue prefixes — same syntax as the Step 1 field: `PREFIX` or `PREFIX:count`, comma-separated (e.g. `db:30,23,db11:12`). Presence of this param is what triggers auto-discovery. |
+| `prefixes2` | no | Second-hop clue prefixes, same syntax. |
+| `hop2` | no | Overrides the "2nd-hop km" input (assumed RF reach for 2nd-hop/relayed clues). |
+| `cluster` | no | Overrides the "Cluster km" input (search radius / hull buffer). |
+
+If `prefixes` is present, the page pre-fills Step 1 from these params and
+automatically clicks "Find Best Matching Region" on load — no further
+interaction needed to land on candidate clusters.
+
+```
+https://triangulator.dutchmeshcore.nl/?prefixes=db:30,23,db11:12&prefixes2=a0:8,fc&cluster=6
+```
+
+There's no `hop1` param — the "1st-hop km" input was removed; 1st-hop
+observers' range is now derived from proven-link data / node activity rather
+than a fixed assumed value.
+
 ## The full data-collection pipeline
 
 The MQTT collector, local observations database, hourly export, GPS-track

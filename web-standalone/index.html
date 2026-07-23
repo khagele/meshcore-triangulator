@@ -3049,7 +3049,11 @@
         }
       });
       document.addEventListener("click", (e) => {
-        if (!whatsNewPanel.hidden && !whatsNewPanel.contains(e.target) && e.target !== whatsNewButton) {
+        // closest(), not identity: the button contains an icon span, so a
+        // click on the icon has e.target === that span, not the button —
+        // which used to close the panel in the same click that opened it.
+        const insideButton = e.target instanceof Element && e.target.closest("#whats-new-button");
+        if (!whatsNewPanel.hidden && !whatsNewPanel.contains(e.target) && !insideButton) {
           whatsNewPanel.hidden = true;
         }
       });

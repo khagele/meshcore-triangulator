@@ -241,9 +241,10 @@
       font-size: 0.72rem;
     }
 
-    /* Meta/product actions (changelog) sit apart from the map actions so
-       they don't read as part of the Step 1-3 task flow. */
-    .controls-card .whats-new {
+    /* Meta/product actions (help, changelog) sit apart from the map actions
+       so they don't read as part of the Step 1-3 task flow. The first one
+       opens the right-aligned group; the rest follow it. */
+    .controls-card .is-meta-first {
       margin-left: auto;
     }
     .controls-card button.is-icon {
@@ -831,6 +832,151 @@
       align-items: center;
       justify-content: center;
     }
+    /* First-visit explainer (#8). Sizes to its content and only scrolls when
+       the viewport genuinely can't fit it: the card caps at 85vh and the body
+       is the flex child that gives, so head + "Got it" stay put on small
+       screens while large ones show everything without a scrollbar. */
+    #intro-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 5100;         /* above #deep-link-splash (5000) */
+      background: rgba(7, 17, 24, 0.62);
+      backdrop-filter: blur(3px);
+      padding: 16px;
+    }
+    #intro-overlay:not([hidden]) {   /* see the note above re: [hidden] */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .intro-card {
+      display: flex;
+      flex-direction: column;
+      width: min(440px, 92vw);
+      max-height: 85vh;
+      border-radius: 20px;
+      background: rgba(7, 25, 35, 0.97);
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--shadow);
+    }
+    .intro-head {
+      padding: 20px 20px 0;
+    }
+    .intro-title {
+      margin: 0 0 3px;
+      font-size: 1rem;
+      font-weight: 500;
+    }
+    .intro-lede {
+      margin: 0;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .intro-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 15px 20px 4px;
+    }
+    .intro-step {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 6px;
+    }
+    .intro-step p {
+      margin: 0;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+    .intro-num {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(0, 184, 148, 0.16);
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+    .intro-detail {
+      margin: 0 0 8px 29px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .intro-detail code {
+      color: var(--text);
+      font-size: 0.7rem;
+    }
+    .intro-detail strong,
+    .intro-sub strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+    .intro-sub {
+      margin: 0 0 6px 29px;
+      padding-left: 9px;
+      border-left: 2px solid rgba(0, 184, 148, 0.3);
+    }
+    .intro-sub p {
+      margin: 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .intro-sub p.intro-sub-title {
+      margin-bottom: 3px;
+      color: var(--text);
+    }
+    .intro-foot {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 20px 16px;
+      margin-top: 4px;
+      border-top: 1px solid var(--panel-border);
+    }
+    .intro-hint,
+    .intro-loading {
+      flex: 1;
+      min-width: 0;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+    .intro-hint strong {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .intro-loading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .intro-loading[hidden] {
+      display: none;
+    }
+    .intro-spinner {
+      width: 15px;
+      height: 15px;
+      margin: 0;
+      border-width: 2px;
+      flex: none;
+    }
+    .intro-foot button {
+      flex: none;
+      margin: 0;
+      border-radius: 10px;
+      padding: 7px 15px;
+      font: inherit;
+      font-weight: 600;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
     .deep-link-splash-card {
       width: min(260px, 80%);
       padding: 20px;
@@ -912,6 +1058,57 @@
       <p class="deep-link-splash-sub">Resolving prefixes and finding the best matching region</p>
     </div>
   </div>
+
+  <!-- First-visit explainer (#8). Doubles as the waiting screen when someone
+       arrives via a shared link for the first time: same card, plus a loading
+       row in the footer, so the wait is spent reading rather than staring at
+       a spinner. -->
+  <div id="intro-overlay" hidden>
+    <div class="intro-card" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+      <div class="intro-head">
+        <p class="intro-title" id="intro-title">How this works</p>
+        <p class="intro-lede">Find where a MeshCore node is, from which repeaters heard it.</p>
+      </div>
+
+      <div class="intro-body">
+        <div class="intro-step"><span class="intro-num">1</span><p>Enter the clues</p></div>
+        <p class="intro-detail">Prefixes of repeaters that heard the node — 2, 4 or 6 hex, comma-separated. Add <code>:count</code> for how many times it heard (that becomes its weight).</p>
+        <p class="intro-detail">Second-hop prefixes heard it via a relay — a weaker clue, so they're automatically down-weighted.</p>
+
+        <div class="intro-step"><span class="intro-num">2</span><p>Pick a cluster, then tune it</p></div>
+        <p class="intro-detail">Choosing a candidate region pulls its proven links and lists the observers. Nothing you change here counts until you hit <strong>Apply</strong>.</p>
+
+        <div class="intro-sub">
+          <p class="intro-sub-title">Weights</p>
+          <p>Raise one to make that observer pull the estimate harder; drop it to nudge a doubtful one aside.</p>
+        </div>
+        <div class="intro-sub">
+          <p class="intro-sub-title">Duplicates</p>
+          <p>One prefix can match several real nodes. The one with proven links wins, else the one nearest the cluster; the rest are listed unchecked as <strong>duplicate prefix</strong> so you can swap the pick.</p>
+        </div>
+        <div class="intro-sub">
+          <p class="intro-sub-title">Missing a repeater</p>
+          <p>Add its prefix to re-include it — it has to already sit inside the locked cluster, and you'll be told if it doesn't.</p>
+        </div>
+        <div class="intro-sub">
+          <p class="intro-sub-title">Proven links</p>
+          <p>Green lines are confirmed hops. They set each repeater's assumed range, so removing one you don't believe tightens that range.</p>
+        </div>
+
+        <div class="intro-step"><span class="intro-num">3</span><p>Estimate</p></div>
+        <p class="intro-detail">Scores the area against the weighted observers and highlights the likeliest spot. Refine with terrain and line-of-sight for a closer look. Change anything above and just estimate again.</p>
+      </div>
+
+      <div class="intro-foot">
+        <span id="intro-loading" class="intro-loading" hidden>
+          <span class="deep-link-spinner intro-spinner"></span>
+          <span>Loading the shared search…</span>
+        </span>
+        <span id="intro-hint" class="intro-hint">Reopen anytime with <strong>?</strong></span>
+        <button id="intro-dismiss" type="button">Got it</button>
+      </div>
+    </div>
+  </div>
   <div class="topbar">
     <span class="topbar-stripe"></span>
     <div class="topbar-brand">
@@ -943,6 +1140,7 @@
           <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
           <button id="open-3d-button" type="button" class="button-secondary" aria-pressed="false">3D View</button>
           <button id="share-button" type="button" class="button-secondary">Share</button>
+          <button id="intro-open-button" type="button" class="button-muted is-icon is-meta-first" aria-label="How this works" title="How this works">?</button>
           <div class="whats-new">
             <button id="whats-new-button" type="button" class="button-muted is-icon" aria-label="What's new" aria-haspopup="dialog" title="What's new">
               <span aria-hidden="true">🔔</span><span id="whats-new-dot" class="whats-new-dot" hidden></span>
@@ -1018,6 +1216,11 @@
   <script>
     const discoverButton = document.getElementById("discover-button");
     const clearMapButton = document.getElementById("clear-map-button");
+    const introOverlay = document.getElementById("intro-overlay");
+    const introOpenButton = document.getElementById("intro-open-button");
+    const introDismiss = document.getElementById("intro-dismiss");
+    const introLoading = document.getElementById("intro-loading");
+    const introHint = document.getElementById("intro-hint");
     const shareButton = document.getElementById("share-button");
     const shareStatus = document.getElementById("share-status");
     const shareFallback = document.getElementById("share-fallback");
@@ -2701,6 +2904,7 @@
           discoverButton.disabled = false;
         }
         if (deepLinkSplash) deepLinkSplash.hidden = true;
+        introLoadingDone();
         syncControlStates();
       }
     }
@@ -3124,11 +3328,56 @@
       return true;
     }
 
+    // ── First-visit explainer (#8) ──────────────────────────────────────────
+    const INTRO_SEEN_KEY = "intro:seen";
+    // localStorage throws in some privacy modes — a help overlay must never
+    // be the reason the page fails to start.
+    function introSeen() {
+      try { return localStorage.getItem(INTRO_SEEN_KEY) === "1"; } catch (e) { return false; }
+    }
+    function markIntroSeen() {
+      try { localStorage.setItem(INTRO_SEEN_KEY, "1"); } catch (e) { /* nothing to do */ }
+    }
+    // loading=true is the shared-link variant: same card, but the footer
+    // shows progress instead of the reopen hint, and it waits to be
+    // dismissed rather than vanishing mid-sentence.
+    function openIntro(loading = false) {
+      if (!introOverlay) return;
+      if (introLoading) introLoading.hidden = !loading;
+      if (introHint) introHint.hidden = loading;
+      introOverlay.hidden = false;
+      if (introDismiss) introDismiss.focus();
+    }
+    function closeIntro() {
+      if (!introOverlay || introOverlay.hidden) return;
+      introOverlay.hidden = true;
+      markIntroSeen();
+    }
+    function introLoadingDone() {
+      if (!introOverlay || introOverlay.hidden || !introLoading || introLoading.hidden) return;
+      introLoading.hidden = true;
+      if (introHint) introHint.hidden = false;
+    }
+    if (introOpenButton) introOpenButton.addEventListener("click", () => openIntro(false));
+    if (introDismiss) introDismiss.addEventListener("click", closeIntro);
+    if (introOverlay) {
+      introOverlay.addEventListener("click", (e) => { if (e.target === introOverlay) closeIntro(); });
+    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && introOverlay && !introOverlay.hidden) closeIntro();
+    });
+
+    const showIntro = !introSeen();
     const deepLinked = applyDeepLinkParams();
     applyPrefixInput();
     if (deepLinked) {
-      if (deepLinkSplash) deepLinkSplash.hidden = false;
+      // First-timers get the explainer as their wait screen; everyone else
+      // keeps the plain auto-dismissing splash from #26.
+      if (showIntro) openIntro(true);
+      else if (deepLinkSplash) deepLinkSplash.hidden = false;
       discoverButton.click();
+    } else if (showIntro) {
+      openIntro(false);
     }
 
     // "What's new" changelog (#22): loads web-standalone/changelog.json,

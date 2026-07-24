@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-07-23-share-button",
+    "date": "2026-07-23",
+    "title": "Share a link to your search",
+    "body": "A Share button copies a link to your current clues, so you can hand someone the exact search instead of describing it."
+  },
+  {
     "id": "2026-07-22-map-controls",
     "date": "2026-07-22",
     "title": "Cleaner map controls",

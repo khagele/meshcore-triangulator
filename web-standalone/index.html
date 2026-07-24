@@ -794,6 +794,20 @@
       line-height: 1.45;
     }
 
+    /* Direction arrow on one-way proven links (#38). */
+    .link-arrow {
+      font-size: 15px;
+      line-height: 14px;
+      text-align: center;
+      color: #8ef0d1;
+      /* Outlined both ways: the basemap under a link can be near-white
+         farmland or near-black water. */
+      text-shadow:
+        0 0 2px rgba(7, 17, 24, 0.95),
+        0 0 5px rgba(7, 17, 24, 0.8);
+      pointer-events: none;
+    }
+
     .link-remove-btn {
       margin-top: 8px;
       width: 100%;
@@ -1768,6 +1782,87 @@
       return { kept, excluded };
     }
 
+    // ── Proven links (#38) ──────────────────────────────────────────────────
+    // Upstream is third-party and rate-limitable (see AGENTS.md), so the
+    // number of nodes we query stays bounded — but nothing is dropped
+    // silently, and the links of the nodes we do query are kept in full.
+    const PROVEN_LINK_NODE_BUDGET = 14;
+    const PROVEN_LINK_MIN_CONFIDENCE = 85;
+    let linkFetchSkipped = 0;
+
+    // mc-radar reports direction relative to the node that was queried, so
+    // `to` means queried → peer. Carried through so the map can show which
+    // way a hop was actually verified.
+    function buildProvenLink(from, to, connection) {
+      return {
+        from,
+        to,
+        confidence: connection.confidence,
+        direction: connection.direction || null,
+        confidenceTo: Number.isFinite(connection.confidence_to) ? connection.confidence_to : null,
+        confidenceFrom: Number.isFinite(connection.confidence_from) ? connection.confidence_from : null,
+        distanceKm: Number.isFinite(connection.distance_km) ? connection.distance_km : null
+      };
+    }
+
+    // Both ends of a link can report it once each end is fetched. Collapse to
+    // one entry per unordered pair, keeping whichever directions either side
+    // actually verified.
+    function dedupeProvenLinks(links) {
+      const byPair = new Map();
+      links.forEach((link) => {
+        const a = nodeId(link.from);
+        const b = nodeId(link.to);
+        const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+        const forward = link.direction === "both" || link.direction === "to" || !link.direction;
+        const backward = link.direction === "both" || link.direction === "from";
+        const existing = byPair.get(key);
+        if (!existing) {
+          byPair.set(key, {
+            link,
+            fromTo: forward ? new Set([`${a}>${b}`]) : new Set(),
+            seen: new Set([forward ? `${a}>${b}` : null, backward ? `${b}>${a}` : null].filter(Boolean))
+          });
+          return;
+        }
+        if (forward) existing.seen.add(`${a}>${b}`);
+        if (backward) existing.seen.add(`${b}>${a}`);
+        // Keep the report carrying the most detail.
+        const score = (l) => (l.confidenceTo !== null ? 1 : 0) + (l.confidenceFrom !== null ? 1 : 0);
+        if (score(link) > score(existing.link)) existing.link = link;
+      });
+      return Array.from(byPair.values()).map(({ link, seen }) => {
+        const a = nodeId(link.from);
+        const b = nodeId(link.to);
+        const fwd = seen.has(`${a}>${b}`);
+        const bwd = seen.has(`${b}>${a}`);
+        return { ...link, direction: fwd && bwd ? "both" : (fwd ? "to" : (bwd ? "from" : link.direction)) };
+      });
+    }
+
+    // Arrowhead at the midpoint of a one-way link, rotated to the bearing of
+    // the verified direction. A rotated divIcon keeps this dependency-free —
+    // no Leaflet plugin, no build step.
+    function addLinkDirectionArrow(link) {
+      const [tail, head] = link.direction === "from" ? [link.to, link.from] : [link.from, link.to];
+      const mid = { lat: (tail.lat + head.lat) / 2, lon: (tail.lon + head.lon) / 2 };
+      const dLon = (head.lon - tail.lon) * Math.cos(mid.lat * Math.PI / 180);
+      const dLat = head.lat - tail.lat;
+      if (!dLon && !dLat) return;
+      // Screen bearing: 0deg points right, y grows downward on the map.
+      const deg = Math.atan2(-dLat, dLon) * 180 / Math.PI;
+      L.marker([mid.lat, mid.lon], {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({
+          className: "",
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+          html: `<div class="link-arrow" style="transform:rotate(${deg.toFixed(1)}deg)">▶</div>`
+        })
+      }).addTo(resolvedLayer);
+    }
+
     function provenLinkId(link) {
       return `${nodeId(link.from)}->${nodeId(link.to)}`;
     }
@@ -1892,19 +1987,35 @@
       });
       provenLinks.forEach((link) => {
         const lid = provenLinkId(link);
+        // One-way links are weaker evidence about coverage than a verified
+        // round trip, so they read differently: thinner and semi-transparent,
+        // with an arrowhead showing which way was actually confirmed (#38).
+        const oneWay = link.direction === "to" || link.direction === "from";
         const line = L.polyline([
           [link.from.lat, link.from.lon],
           [link.to.lat, link.to.lon]
         ], {
           color: "#8ef0d1",
-          weight: 3,
-          opacity: 0.9,
+          weight: oneWay ? 2 : 3,
+          opacity: oneWay ? 0.65 : 0.9,
           dashArray: link.confidence >= 95 ? null : "6 5"
         }).addTo(resolvedLayer);
+        if (oneWay) addLinkDirectionArrow(link);
+        const dirLabel = link.direction === "both"
+          ? `${link.from.shortId} ⇄ ${link.to.shortId} (both ways)`
+          : link.direction === "from"
+            ? `${link.to.shortId} → ${link.from.shortId} (one way)`
+            : link.direction === "to"
+              ? `${link.from.shortId} → ${link.to.shortId} (one way)`
+              : `${link.from.shortId} → ${link.to.shortId}`;
+        const confLine = (link.confidenceTo !== null || link.confidenceFrom !== null)
+          ? `Confidence: ${link.confidenceTo !== null ? `→ ${link.confidenceTo}` : ""}${link.confidenceTo !== null && link.confidenceFrom !== null ? " · " : ""}${link.confidenceFrom !== null ? `← ${link.confidenceFrom}` : ""}`
+          : `Confidence: ${link.confidence}`;
+        const distLine = Number.isFinite(link.distanceKm) ? `<br>Distance: ${link.distanceKm.toFixed(2)} km` : "";
         line.bindPopup(`
           <div>
             <p class="popup-title">Proven link</p>
-            <p class="popup-copy">${link.from.shortId} → ${link.to.shortId}<br>Confidence: ${link.confidence}</p>
+            <p class="popup-copy">${dirLabel}<br>${confLine}${distLine}</p>
             <button type="button" class="link-remove-btn" data-linkid="${lid}">Remove this link</button>
           </div>
         `);
@@ -2640,33 +2751,38 @@
       const supportNodeMap = new Map();
       const provenLinks = [];
       const fetchOrder = roundRobinByPrefix(clusterNodes);
-      await Promise.all(fetchOrder.slice(0, 8).map(async (node) => {
+      // Upstream is third-party and rate-limitable, so the number of nodes we
+      // ask about stays capped — but the cap is reported rather than silent,
+      // and no longer truncates the links of the nodes we do fetch (#38).
+      const fetchTargets = fetchOrder.slice(0, PROVEN_LINK_NODE_BUDGET);
+      linkFetchSkipped = Math.max(0, fetchOrder.length - fetchTargets.length);
+      await Promise.all(fetchTargets.map(async (node) => {
         try {
           const connections = await fetchMcRadarConnections(node.public_key || node.key);
-          const usable = connections.filter((connection) => connection.confidence >= 85).slice(0, 8);
+          // No per-node slice: capping here silently dropped high-confidence
+          // links, and since provenRadiusKm is a percentile over exactly these
+          // distances, dropping the long ones biased each repeater's range low.
+          const usable = connections.filter((connection) => connection.confidence >= PROVEN_LINK_MIN_CONFIDENCE);
           const connectionDistances = [];
           await Promise.all(usable.map(async (connection) => {
-            if (clusterKeys.has(connection.connected_node_public_key) || supportNodeMap.has(connection.connected_node_public_key)) {
-              const clusterPeer = clusterNodes.find((candidateNode) => (candidateNode.public_key || candidateNode.key) === connection.connected_node_public_key);
-              if (clusterPeer) {
-                connectionDistances.push(haversineKm(node, clusterPeer));
-                provenLinks.push({
-                  from: node,
-                  to: clusterPeer,
-                  confidence: connection.confidence
-                });
-              }
+            const peerKey = connection.connected_node_public_key;
+            // A peer we already know about — either a cluster node or a
+            // support node resolved by an earlier fetch. Previously only the
+            // cluster case recorded a link, so every repeater after the first
+            // to reach a shared support node lost that link entirely.
+            const knownPeer =
+              clusterNodes.find((candidate) => (candidate.public_key || candidate.key) === peerKey) ||
+              supportNodeMap.get(peerKey);
+            if (knownPeer) {
+              connectionDistances.push(haversineKm(node, knownPeer));
+              provenLinks.push(buildProvenLink(node, knownPeer, connection));
               return;
             }
-            const resolved = await fetchMcRadarNodeByPublicKey(connection.connected_node_public_key);
+            const resolved = await fetchMcRadarNodeByPublicKey(peerKey);
             if (resolved) {
               connectionDistances.push(haversineKm(node, resolved));
-              supportNodeMap.set(connection.connected_node_public_key, { ...resolved, weight: 0.6 });
-              provenLinks.push({
-                from: node,
-                to: resolved,
-                confidence: connection.confidence
-              });
+              supportNodeMap.set(peerKey, { ...resolved, weight: 0.6 });
+              provenLinks.push(buildProvenLink(node, resolved, connection));
             }
           }));
           const derivedRadius = percentile(connectionDistances, 0.95);
@@ -2689,7 +2805,7 @@
         observerPoolMap.set(node.public_key || node.key, { ...node, weight: 1 });
       });
       lockedObserverPool = Array.from(observerPoolMap.values());
-      currentProvenLinks = provenLinks;
+      currentProvenLinks = dedupeProvenLinks(provenLinks);
 
       // Hull-shaped region (#15): the search-phase circular threshold
       // (connectedComponents) is a rough net; now that we have this
@@ -2743,7 +2859,11 @@
       const dedupNote = dupRemoved.length
         ? ` Auto-removed ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"} (kept the one nearest the cluster centre) — review in the list below.`
         : "";
-      clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${hullNote}${dedupNote}`;
+      // Never let a coverage cap look like "there was nothing more" (#38).
+      const linkCapNote = linkFetchSkipped
+        ? ` Proven links fetched for the first ${PROVEN_LINK_NODE_BUDGET} nodes only — ${linkFetchSkipped} not queried.`
+        : "";
+      clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${hullNote}${dedupNote}${linkCapNote}`;
       syncClusterEditorFromLockedRegion();
       setDiscoveryCollapsed(true);
       renderCandidateMap([]);

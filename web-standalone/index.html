@@ -2165,27 +2165,50 @@
 
     // Proven-link support nodes do NOT anchor the position estimate. Their job
     // is to estimate each observer repeater's coverage range (provenRadiusKm),
-    // and the estimate is constrained to within those ranges via currentRfAnchors
-    // + anchorRangeKm(). So their direct positional pull is 0 here.
+    // which reaches the estimate through anchorRangeKm() below. So their direct
+    // positional pull is 0 here.
     // (Set >0 only if you want them to also nudge the estimate.)
     const SUPPORT_NODE_SCORE_WEIGHT = 0;
 
+    // "Heard by X" means "somewhere inside X's coverage", not "at X" (#40).
+    // This does NOT move the peak of a single term: like the old Gaussian, the
+    // logistic is strictly decreasing in distance, so one lone observer still
+    // puts the estimate on top of itself. That case is unidentifiable either
+    // way. What changes is the PLATEAU. The old kernel used
+    // sigma = max(2, R*0.5), so for R >= 4 km it was down to exp(-4) ~ 0.018 by
+    // the coverage edge (nearer 0.37 for a 2 km R, where the floor bound it) —
+    // far too tight for the overlap of several observers to outscore sitting on
+    // one of them. This one stays broad across the disk and falls off outside.
+    // Profile, in units of the CLAMPED range used below rather than the raw hop
+    // radius: ~1.00 at 0, ~0.95 at 0.5R, 0.50 at R, ~0.05 at 1.5R.
+    const COVERAGE_EDGE_SHARPNESS = 6;
+
+    // Range is clamped to >= 2 km. anchorRangeKm()'s hopRadiusKm tier is
+    // unfloored (the 2nd-hop input allows 1 km), and a plateau finer than the
+    // ~0.8 km estimate grid would be false precision anyway.
+    function coverageLikelihood(distanceKm, rangeKm) {
+      const range = Math.max(2, rangeKm);
+      return 1 / (1 + Math.exp(COVERAGE_EDGE_SHARPNESS * ((distanceKm / range) - 1)));
+    }
+
+    // One term per observer. This previously scored repeater-like nodes twice —
+    // once here, and again over currentRfAnchors, which deriveAnchors() always
+    // returns as a subset of these same nodes. That gave repeaters an undesigned
+    // two-Gaussian kernel, and the all-nodes fallback in deriveAnchors() meant
+    // the relative weighting flipped depending on cluster composition.
+    // Note anchorRangeKm() is blind to node type, so nothing here grants a
+    // repeater more reach than any other observer — the implicit bonus they got
+    // from being scored twice is deliberately gone (#40).
     function scorePoint(point, matchedNodes, supportNodes) {
       let score = 0;
-      // Each observer is a disk of its hop radius (first ~10 km, second ~25 km),
-      // weighted by its (hop-adjusted) weight. The estimate favours the overlap.
       matchedNodes.forEach((node) => {
-        const distance = haversineKm(point, node);
-        const sigma = Math.max(2, anchorRangeKm(node) * 0.5);
-        score += (2.4 * node.weight) * Math.exp(-Math.pow(distance / sigma, 2));
+        score += (2.4 * node.weight) * coverageLikelihood(haversineKm(point, node), anchorRangeKm(node));
       });
       supportNodes.forEach((node) => {
-        const distance = haversineKm(point, node);
-        score += SUPPORT_NODE_SCORE_WEIGHT * Math.exp(-Math.pow(distance / 4.8, 2));
-      });
-      currentRfAnchors.forEach((anchor) => {
-        const distance = haversineKm(point, anchor);
-        score += 1.1 * (anchor.weight || 1) * Math.exp(-Math.pow(distance / (anchorRangeKm(anchor) * 1.05), 2));
+        // 4.8 is now a coverage RADIUS (half-value at 4.8 km), not the Gaussian
+        // sigma it used to be (half-value ~4.0 km). Re-tune it before raising
+        // SUPPORT_NODE_SCORE_WEIGHT above 0 — the tail is ~7x thinner.
+        score += SUPPORT_NODE_SCORE_WEIGHT * coverageLikelihood(haversineKm(point, node), 4.8);
       });
       return score;
     }

@@ -1269,6 +1269,14 @@
     const REPEATER_ANTENNA_HEIGHT_M = 12;
     const TARGET_ANTENNA_HEIGHT_M = 1.5;
     const DEFAULT_ANCHOR_RANGE_KM = 12;
+    // One definition of "proven coverage radius", used by BOTH derivation
+    // sites. They disagreed before — p80 after a link edit, p95 during
+    // discovery — so the same node's assumed range changed depending on which
+    // code path last stamped it (#42). p80 is deliberately below the maximum:
+    // live data has verified links out to 355 km (airborne and high-site
+    // peers), and a near-max statistic hands those nodes a coverage disk so
+    // wide it constrains nothing.
+    const PROVEN_RADIUS_PERCENTILE = 0.80;
     // Second-hop observers are one RF hop further from the source: weaker clue.
     const SECOND_HOP_WEIGHT_FACTOR = 0.3;
     // 1st-hop nodes have no fixed assumed range any more (removed, #15) — they
@@ -1311,7 +1319,7 @@
     // Last estimate candidate points + full scored grid, for the 3D view.
     let lastEstimatePoints = [];
     let lastEstimateGrid = [];
-    let lastEstimateMax = 1;
+    let lastEstimateMax = 0;   // best LOG-likelihood of the last estimate (#45)
 
     const map = L.map("map", {
       zoomControl: true,
@@ -1873,8 +1881,8 @@
       return `${nodeId(link.from)}->${nodeId(link.to)}`;
     }
 
-    // Recompute each observer's proven coverage radius (p80 of remaining
-    // proven-link distances) after a link is added/removed.
+    // Recompute each observer's proven coverage radius from the remaining
+    // proven-link distances after a link is added/removed.
     function recomputeProvenRadii() {
       currentMatchedNodes.forEach((node) => {
         const id = nodeId(node);
@@ -1883,7 +1891,7 @@
           if (nodeId(link.from) === id) dists.push(haversineKm(node, link.to));
           else if (nodeId(link.to) === id) dists.push(haversineKm(node, link.from));
         });
-        if (dists.length) node.provenRadiusKm = Math.max(2, percentile(dists, 0.80));
+        if (dists.length) node.provenRadiusKm = Math.max(2, percentile(dists, PROVEN_RADIUS_PERCENTILE));
       });
     }
 
@@ -2147,13 +2155,21 @@
       return 0.14 + (score * 0.34);
     }
 
+    // Linear interpolation between the two bracketing samples. This used to be
+    // floor-indexed, which under-reads badly on the small samples we actually
+    // have: for 4 distances at p=0.95, floor(3 * 0.95) = 2 returned the 3rd
+    // smallest of 4 rather than anything near the longest. The nodes hit
+    // hardest were the ones with the fewest proven links — 38% of repeaters
+    // carry 4 or fewer — i.e. exactly those whose radius is least certain (#42).
     function percentile(values, p) {
       if (!values.length) {
         return null;
       }
       const sorted = [...values].sort((a, b) => a - b);
-      const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * p)));
-      return sorted[index];
+      const rank = (sorted.length - 1) * p;
+      const lower = Math.floor(rank);
+      const upper = Math.min(lower + 1, sorted.length - 1);
+      return sorted[lower] + ((sorted[upper] - sorted[lower]) * (rank - lower));
     }
 
     function anchorRangeKm(anchor) {
@@ -2197,6 +2213,13 @@
       return 1 / (1 + Math.exp(COVERAGE_EDGE_SHARPNESS * ((distanceKm / range) - 1)));
     }
 
+    // Below this, a violated constraint stops getting more expensive. Without a
+    // floor, one observer that a point badly contradicts drives the whole score
+    // to -Infinity and the argmax becomes arbitrary among equally-impossible
+    // points. 1e-6 keeps a violation costly (~13.8 nats) but survivable, which
+    // is the right behaviour when a single observer may simply be wrong.
+    const MIN_OBSERVATION_LIKELIHOOD = 1e-6;
+
     // One term per observer. This previously scored repeater-like nodes twice —
     // once here, and again over currentRfAnchors, which deriveAnchors() always
     // returns as a subset of these same nodes. That gave repeaters an undesigned
@@ -2205,18 +2228,40 @@
     // Note anchorRangeKm() is blind to node type, so nothing here grants a
     // repeater more reach than any other observer — the implicit bonus they got
     // from being scored twice is deliberately gone (#40).
+    //
+    // Observations combine as a PRODUCT of likelihoods — accumulated here as a
+    // sum of logs. This used to be a plain sum of weighted likelihoods, which
+    // is an OR: one heavily-weighted observer could outvote the combined
+    // geometry of every other, dragging the peak onto itself. A product is an
+    // AND — a point has to satisfy every observer to score well, so the
+    // estimate lands in the INTERSECTION rather than the centroid of votes.
+    // That is what triangulation means (#45).
+    //
+    // `weight` is times-heard, so n independent receptions enter as L^n, i.e.
+    // n * log L. Weight as an exponent is principled; weight as an amplitude
+    // inside a sum was not.
+    //
+    // The old 2.4 amplitude is gone: a constant factor on every term is an
+    // additive constant in log space and cannot move the argmax.
+    //
+    // Returns a NEGATIVE number (log of a probability). Anything consuming it
+    // must normalise on the DIFFERENCE from the best score, not the ratio —
+    // see renderLikelihoodSurface() and heatFeatures3d().
     function scorePoint(point, matchedNodes, supportNodes) {
-      let score = 0;
+      let logScore = 0;
       matchedNodes.forEach((node) => {
-        score += (2.4 * node.weight) * coverageLikelihood(haversineKm(point, node), anchorRangeKm(node));
+        const likelihood = coverageLikelihood(haversineKm(point, node), anchorRangeKm(node));
+        logScore += node.weight * Math.log(Math.max(likelihood, MIN_OBSERVATION_LIKELIHOOD));
       });
       supportNodes.forEach((node) => {
-        // 4.8 is now a coverage RADIUS (half-value at 4.8 km), not the Gaussian
+        // Still a no-op while SUPPORT_NODE_SCORE_WEIGHT is 0 (0 * log L = 0).
+        // 4.8 is a coverage RADIUS (half-value at 4.8 km), not the Gaussian
         // sigma it used to be (half-value ~4.0 km). Re-tune it before raising
         // SUPPORT_NODE_SCORE_WEIGHT above 0 — the tail is ~7x thinner.
-        score += SUPPORT_NODE_SCORE_WEIGHT * coverageLikelihood(haversineKm(point, node), 4.8);
+        const likelihood = coverageLikelihood(haversineKm(point, node), 4.8);
+        logScore += SUPPORT_NODE_SCORE_WEIGHT * Math.log(Math.max(likelihood, MIN_OBSERVATION_LIKELIHOOD));
       });
-      return score;
+      return logScore;
     }
 
     async function fetchAhnLayerValue(lat, lon, layerName, cache) {
@@ -2298,20 +2343,36 @@
       return worstClearance * clamp(1 - (localClutter / 18), 0.35, 1);
     }
 
+    // Likelihood that an obstructed path still produced the reception we saw.
+    // Preserves the old (0.3 + 0.7 * los) shape: clear LOS costs nothing,
+    // fully obstructed costs log(0.3) ~ -1.2 nats per unit weight.
+    const TERRAIN_LOS_FLOOR = 0.3;
+
+    // Returns a LOG-domain term, added to scorePoint()'s log-likelihood in
+    // updateHeatmap(). Both are now logs of probabilities, so adding them is a
+    // product of likelihoods — the units match (#45).
+    //
+    // Two things the old additive version did are deliberately gone:
+    //
+    //   - the `distancePrior` term. It re-applied a Gaussian on the same
+    //     distance scorePoint() already models, so terrain was mostly just
+    //     restating the flat pass at a different width. LOS is the only thing
+    //     terrain knows that scorePoint() does not, so LOS is all it
+    //     contributes now. This gives terrain real authority for the first
+    //     time — previously a fully obstructed path scored only ~25% below a
+    //     clear one, because the largest term was untouched by terrain
+    //     (#35 finding B).
+    //   - `dualBonus`, a flat +1.1 gated on every anchor clearing los >= 0.55.
+    //     A step discontinuity in the objective: one anchor at 0.549 dropped it
+    //     entirely, which could jump the argmax between adjacent cells for no
+    //     physical reason. It has no likelihood interpretation to carry over.
     async function terrainAnchorScore(point) {
       const anchors = currentRfAnchors.length ? currentRfAnchors : currentMatchedNodes;
-      const scores = await Promise.all(anchors.map(async (anchor) => {
-        const distance = haversineKm(point, anchor);
-        const distancePrior = Math.exp(-Math.pow(distance / (anchorRangeKm(anchor) * 1.05), 2));
+      const logFactors = await Promise.all(anchors.map(async (anchor) => {
         const los = await terrainLosFactor(anchor, point);
-        return {
-          los,
-          score: 1.9 * (anchor.weight || 1) * distancePrior * (0.3 + (0.7 * los))
-        };
+        return (anchor.weight || 1) * Math.log(TERRAIN_LOS_FLOOR + ((1 - TERRAIN_LOS_FLOOR) * los));
       }));
-      const combined = scores.reduce((sum, item) => sum + item.score, 0);
-      const dualBonus = scores.length >= 2 && scores.every((item) => item.los >= 0.55) ? 1.1 : 0;
-      return combined + dualBonus;
+      return logFactors.reduce((sum, value) => sum + value, 0);
     }
 
     function renderLikelihoodSurface(points, label) {
@@ -2319,12 +2380,18 @@
       terrainLayer.clearLayers();
       lastEstimatePoints = points.slice(0, 8);
       lastEstimateGrid = points;
-      const maxScore = points[0]?.score || 1;
-      lastEstimateMax = maxScore;
+      // Scores are log-likelihoods (negative), so normalise on the DIFFERENCE
+      // from the best cell, not the ratio. exp(log p - log pBest) is a proper
+      // likelihood ratio in [0, 1]: 1 at the peak, falling away from it. A
+      // ratio of two negative numbers would have inverted the scale entirely
+      // (#45). Note `?? 0` rather than `|| 0` — a best score of exactly 0 is
+      // legitimate here, it means a perfect fit.
+      const bestLogScore = points[0]?.score ?? 0;
+      lastEstimateMax = bestLogScore;
       const latStep = 0.0075;
       const lonStep = 0.01;
       points.forEach((point) => {
-        const normalized = clamp(point.score / maxScore, 0, 1);
+        const normalized = clamp(Math.exp(point.score - bestLogScore), 0, 1);
         L.rectangle([
           [point.lat - (latStep / 2), point.lon - (lonStep / 2)],
           [point.lat + (latStep / 2), point.lon + (lonStep / 2)]
@@ -2397,6 +2464,8 @@
         let top = grid.slice(0, 36);
         if (useTerrain) {
           const terrainCandidates = grid.slice(0, 36);
+          // Both terms are log-likelihoods now, so adding them multiplies the
+          // underlying probabilities (#45).
           const terrainScored = await Promise.all(terrainCandidates.map(async (point) => ({
             ...point,
             score: point.score + await terrainAnchorScore(point)
@@ -2814,7 +2883,7 @@
               provenLinks.push(buildProvenLink(node, resolved, connection));
             }
           }));
-          const derivedRadius = percentile(connectionDistances, 0.95);
+          const derivedRadius = percentile(connectionDistances, PROVEN_RADIUS_PERCENTILE);
           if (Number.isFinite(derivedRadius)) {
             node.provenRadiusKm = Math.max(2, derivedRadius);
           }
@@ -3337,11 +3406,12 @@
 
     function heatFeatures3d() {
       const latStep = 0.0075, lonStep = 0.01;
-      const max = lastEstimateMax || 1;
+      // Same log-domain normalisation as renderLikelihoodSurface() (#45).
+      const bestLogScore = Number.isFinite(lastEstimateMax) ? lastEstimateMax : 0;
       return {
         type: "FeatureCollection",
         features: (lastEstimateGrid || []).map((p) => {
-          const norm = Math.max(0, Math.min(1, (p.score || 0) / max));
+          const norm = Math.max(0, Math.min(1, Math.exp((p.score ?? 0) - bestLogScore)));
           const ring = [
             [p.lon - lonStep / 2, p.lat - latStep / 2],
             [p.lon + lonStep / 2, p.lat - latStep / 2],

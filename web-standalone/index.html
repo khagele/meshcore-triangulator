@@ -1766,13 +1766,22 @@
     // A 2nd-hop node's inclusion bound beyond the hull: prefer the p80 of its
     // own proven-link distances (real evidence), falling back to hop2 km
     // when it has none.
+    // Distances go through the same plausibility ceiling as provenRadiusKm
+    // (#61). Without it a contaminated 282 km link pulls unrelated 2nd-hop nodes
+    // into the region. Side effect of sharing that helper: the bound now floors
+    // at 2 km, where it could previously be arbitrarily small. bufferKm is added
+    // on top by the caller, so this only affects nodes whose every link is
+    // sub-2 km.
     function secondHopBoundKm(node, provenLinks) {
       const id = nodeId(node);
-      const dists = provenLinks
+      const entries = provenLinks
         .filter((link) => nodeId(link.from) === id || nodeId(link.to) === id)
-        .map((link) => haversineKm(link.from, link.to));
-      const p80 = dists.length ? percentile(dists, 0.8) : null;
-      return Number.isFinite(p80) && p80 > 0 ? p80 : hop2RadiusKm();
+        .map((link) => ({
+          km: haversineKm(link.from, link.to),
+          measured: linkHasMeasuredSignal(link, id)
+        }));
+      const { radiusKm } = provenRadiusFromLinks(entries);
+      return Number.isFinite(radiusKm) && radiusKm > 0 ? radiusKm : hop2RadiusKm();
     }
 
     // Filter a candidate's nodes to the hull-shaped region: 1st-hop nodes
@@ -1803,6 +1812,105 @@
     const PROVEN_LINK_NODE_BUDGET = 14;
     const PROVEN_LINK_MIN_CONFIDENCE = 85;
     let linkFetchSkipped = 0;
+    let implausibleLinksDropped = 0;
+
+    // Link-distance plausibility (#61).
+    //
+    // provenRadiusKm is a p80 over the distances of a node's confidence >= 85
+    // links, and it outranks both fallback constants in anchorRangeKm(), so an
+    // input distance sets an observer's coverage disk directly.
+    //
+    // Those distances are not all physical. Random sample of 200 active located
+    // NL repeaters, 2026-08-17, 1827 links at confidence >= 85: links carrying a
+    // measured reception (signal_*_snr_mean present, ~8% of links) top out at
+    // 62 km with p90 37 km, while links with no signal data run to 282 km. Every
+    // link past 100 km is in the unmeasured set. At SF7 / 62.5 kHz a 282 km
+    // terrestrial link is not credible.
+    //
+    // Unfiltered that pushed derived radii to p75 38.5 km, max 152.7 km. An
+    // observer handed a 152 km disk constrains nothing: coverageLikelihood() is
+    // ~flat across the whole search region at that range, so its term is a
+    // near-constant factor in the product and the observer stops contributing
+    // without ever looking broken.
+    //
+    // Measured effect of this filter on a second independent sample of 200 NL
+    // repeaters (1855 links): 13.2% of links excluded, radius median 11.4 -> 9.9
+    // km, p95 67.0 -> 41.1 km, max 147.3 -> 53.2 km. 125 of 173 nodes with a
+    // derived radius were unchanged, so this trims the tail rather than
+    // rescaling everything.
+    const MAX_PLAUSIBLE_LINK_KM = 60;
+
+    // A node with enough measured links can be held to a tighter ceiling than
+    // the global one.
+    //
+    // Deliberately NOT "use only the measured links". That subset skews short,
+    // because retransmission delay is inversely proportional to received SNR, so
+    // logged receptions over-represent strong links. And an under-estimated
+    // radius is worse than an over-estimated one here: a disk that excludes the
+    // true position drives its likelihood to the MIN_OBSERVATION_LIKELIHOOD
+    // floor and actively pushes the estimate away, whereas a disk that is too
+    // wide merely adds little information. So the measured subset can tighten
+    // the ceiling, never below DEFAULT_ANCHOR_RANGE_KM, and only once a quorum
+    // of measurements exists.
+    //
+    // This rarely fires today: ~8% of links carry any signal data at all, and
+    // only the receive-direction half of that counts toward a given node (see
+    // linkHasMeasuredSignal). Counting either direction it reached quorum on 7 of
+    // 173 sampled nodes, so direction-correctly it is fewer. It is the path that
+    // improves on its own as upstream signal coverage grows, while
+    // MAX_PLAUSIBLE_LINK_KM does the work now.
+    const MEASURED_LINK_QUORUM = 3;
+    const MEASURED_CEILING_SLACK = 1.5;
+
+    function linkCeilingKm(measuredDistances) {
+      if (measuredDistances.length < MEASURED_LINK_QUORUM) {
+        return MAX_PLAUSIBLE_LINK_KM;
+      }
+      const longestMeasured = Math.max(...measuredDistances);
+      return clamp(longestMeasured * MEASURED_CEILING_SLACK, DEFAULT_ANCHOR_RANGE_KM, MAX_PLAUSIBLE_LINK_KM);
+    }
+
+    // entries: [{ km, measured }] for one node's links. Returns the p80 over the
+    // plausible ones, plus what was dropped so callers can report it instead of
+    // capping silently (same rule as PROVEN_LINK_NODE_BUDGET).
+    function provenRadiusFromLinks(entries) {
+      const usable = entries.filter((entry) => Number.isFinite(entry.km) && entry.km > 0);
+      const ceilingKm = linkCeilingKm(usable.filter((entry) => entry.measured).map((entry) => entry.km));
+      const plausible = usable.filter((entry) => entry.km <= ceilingKm).map((entry) => entry.km);
+      const dropped = usable.length - plausible.length;
+      if (!plausible.length) {
+        return { radiusKm: null, dropped, ceilingKm };
+      }
+      return {
+        radiusKm: Math.max(2, percentile(plausible, PROVEN_RADIUS_PERCENTILE)),
+        dropped,
+        ceilingKm
+      };
+    }
+
+    // Direction matters, and the two ends are not interchangeable. mc-radar
+    // orients direction and the signal_* fields relative to the node that was
+    // queried, which buildProvenLink() stores as link.from. So:
+    //
+    //   snrFrom = peer -> link.from, measured AT link.from
+    //   snrTo   = link.from -> peer, measured AT the peer
+    //
+    // What the estimator models is reception: "heard by X" means the target sat
+    // inside X's RECEIVE coverage. So evidence about X's coverage is the
+    // direction where X is the receiver, and that is a different field depending
+    // on which end of the stored link X happens to be. Treating snrTo and
+    // snrFrom as interchangeable credits a node's receive range with a
+    // measurement taken at the other end of the path, and LoRa links are
+    // routinely asymmetric (different antennas, power and noise floor per end).
+    //
+    // Note the narrower gap this leaves: which links feed the radius at all is
+    // still direction-blind, so a link only ever verified outbound from X still
+    // counts toward X's receive coverage. Tracked separately, see #62.
+    function linkHasMeasuredSignal(link, forId) {
+      if (forId === nodeId(link.from)) return Number.isFinite(link.snrFrom);
+      if (forId === nodeId(link.to)) return Number.isFinite(link.snrTo);
+      return false;
+    }
 
     // mc-radar reports direction relative to the node that was queried, so
     // `to` means queried → peer. Carried through so the map can show which
@@ -1815,7 +1923,13 @@
         direction: connection.direction || null,
         confidenceTo: Number.isFinite(connection.confidence_to) ? connection.confidence_to : null,
         confidenceFrom: Number.isFinite(connection.confidence_from) ? connection.confidence_from : null,
-        distanceKm: Number.isFinite(connection.distance_km) ? connection.distance_km : null
+        distanceKm: Number.isFinite(connection.distance_km) ? connection.distance_km : null,
+        // Per-link measured signal, added upstream some time before 2026-08-17
+        // (the repo's earlier notes say this payload carries no SNR; it does
+        // now, on ~8% of links). Carried so a link's plausibility can be judged
+        // by whether anyone actually measured the reception. See #60, #61.
+        snrTo: Number.isFinite(connection.signal_to_snr_mean) ? connection.signal_to_snr_mean : null,
+        snrFrom: Number.isFinite(connection.signal_from_snr_mean) ? connection.signal_from_snr_mean : null
       };
     }
 
@@ -1886,12 +2000,23 @@
     function recomputeProvenRadii() {
       currentMatchedNodes.forEach((node) => {
         const id = nodeId(node);
-        const dists = [];
+        const entries = [];
         currentProvenLinks.forEach((link) => {
-          if (nodeId(link.from) === id) dists.push(haversineKm(node, link.to));
-          else if (nodeId(link.to) === id) dists.push(haversineKm(node, link.from));
+          // measured is evaluated for THIS node's receive direction, which is a
+          // different signal_* field at each end of the link (#61).
+          const measured = linkHasMeasuredSignal(link, id);
+          if (nodeId(link.from) === id) entries.push({ km: haversineKm(node, link.to), measured });
+          else if (nodeId(link.to) === id) entries.push({ km: haversineKm(node, link.from), measured });
         });
-        if (dists.length) node.provenRadiusKm = Math.max(2, percentile(dists, PROVEN_RADIUS_PERCENTILE));
+        // Same plausibility filter as the initial derivation (#61), so a manual
+        // link edit cannot re-admit a distance the first pass rejected.
+        const { radiusKm } = provenRadiusFromLinks(entries);
+        // Drop the property when nothing credible is left, rather than leaving
+        // the previous radius in place. anchorRangeKm() then falls through to the
+        // constants, which is the honest answer for a node with no usable
+        // evidence. Editing links away used to keep the stale value.
+        if (Number.isFinite(radiusKm)) node.provenRadiusKm = radiusKm;
+        else delete node.provenRadiusKm;
       });
     }
 
@@ -2865,6 +2990,7 @@
       // and no longer truncates the links of the nodes we do fetch (#38).
       const fetchTargets = fetchOrder.slice(0, PROVEN_LINK_NODE_BUDGET);
       linkFetchSkipped = Math.max(0, fetchOrder.length - fetchTargets.length);
+      implausibleLinksDropped = 0;
       await Promise.all(fetchTargets.map(async (node) => {
         try {
           const connections = await fetchMcRadarConnections(node.public_key || node.key);
@@ -2872,7 +2998,7 @@
           // links, and since provenRadiusKm is a percentile over exactly these
           // distances, dropping the long ones biased each repeater's range low.
           const usable = connections.filter((connection) => connection.confidence >= PROVEN_LINK_MIN_CONFIDENCE);
-          const connectionDistances = [];
+          const connectionEntries = [];
           await Promise.all(usable.map(async (connection) => {
             const peerKey = connection.connected_node_public_key;
             // A peer we already know about — either a cluster node or a
@@ -2882,21 +3008,28 @@
             const knownPeer =
               clusterNodes.find((candidate) => (candidate.public_key || candidate.key) === peerKey) ||
               supportNodeMap.get(peerKey);
+            // Build the link first so the measured-signal test reads the same
+            // fields here as it does everywhere else (#61).
             if (knownPeer) {
-              connectionDistances.push(haversineKm(node, knownPeer));
-              provenLinks.push(buildProvenLink(node, knownPeer, connection));
+              const link = buildProvenLink(node, knownPeer, connection);
+              connectionEntries.push({ km: haversineKm(node, knownPeer), measured: linkHasMeasuredSignal(link, nodeId(node)) });
+              provenLinks.push(link);
               return;
             }
             const resolved = await fetchMcRadarNodeByPublicKey(peerKey);
             if (resolved) {
-              connectionDistances.push(haversineKm(node, resolved));
+              const link = buildProvenLink(node, resolved, connection);
+              connectionEntries.push({ km: haversineKm(node, resolved), measured: linkHasMeasuredSignal(link, nodeId(node)) });
               supportNodeMap.set(peerKey, { ...resolved, weight: 0.6 });
-              provenLinks.push(buildProvenLink(node, resolved, connection));
+              provenLinks.push(link);
             }
           }));
-          const derivedRadius = percentile(connectionDistances, PROVEN_RADIUS_PERCENTILE);
-          if (Number.isFinite(derivedRadius)) {
-            node.provenRadiusKm = Math.max(2, derivedRadius);
+          // Implausible distances are excluded before the percentile, and the
+          // count is reported rather than dropped silently (#61).
+          const { radiusKm, dropped } = provenRadiusFromLinks(connectionEntries);
+          implausibleLinksDropped += dropped;
+          if (Number.isFinite(radiusKm)) {
+            node.provenRadiusKm = radiusKm;
           }
         } catch (error) {
           // Continue without support enrichment when needed.
@@ -2972,7 +3105,12 @@
       const linkCapNote = linkFetchSkipped
         ? ` Proven links fetched for the first ${PROVEN_LINK_NODE_BUDGET} nodes only — ${linkFetchSkipped} not queried.`
         : "";
-      clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${hullNote}${dedupNote}${linkCapNote}`;
+      // Same rule for the plausibility filter: a dropped link is reported, never
+      // silent (#61).
+      const implausibleNote = implausibleLinksDropped
+        ? ` Ignored ${implausibleLinksDropped} proven link${implausibleLinksDropped === 1 ? "" : "s"} as too long for one hop (ceiling ${MAX_PLAUSIBLE_LINK_KM} km, tighter on nodes with measured signal).`
+        : "";
+      clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${hullNote}${dedupNote}${linkCapNote}${implausibleNote}`;
       syncClusterEditorFromLockedRegion();
       setDiscoveryCollapsed(true);
       renderCandidateMap([]);

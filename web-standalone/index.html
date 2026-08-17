@@ -2504,15 +2504,25 @@
       return globalNodesCache;
     }
 
+    // A node's short_id IS the first byte of its public key — verified against
+    // 1000 live nodes, zero mismatches — so a 2-hex prefix is just a 1-byte
+    // publicKeyPrefix. mc-radar dropped shortId from its search API ("shortId
+    // is no longer supported; use publicKeyPrefix", HTTP 400), which broke
+    // every 2-hex lookup, so both lengths now take the same path (#48).
+    //
+    // The limit is well above the observed maximum: across 3236 active located
+    // nodes the busiest 1-byte prefix matched 22, against the old cap of 25.
+    // That is three nodes of headroom on a growing network, and exceeding it
+    // would silently drop real observers rather than fail — the same class of
+    // invisible degradation this issue was about.
+    const MC_RADAR_PREFIX_SEARCH_LIMIT = 100;
+
     async function fetchMcRadarNodesByPrefix(prefix) {
-      // 1-byte prefix → short-id search; 2-/3-byte → public-key prefix search.
-      const isLong = prefix.length > 2;
       const query = {
-        hasLocation: true, isActive: true, limit: 25, offset: 0,
-        sortBy: "last_seen", sortOrder: "desc"
+        hasLocation: true, isActive: true, limit: MC_RADAR_PREFIX_SEARCH_LIMIT, offset: 0,
+        sortBy: "last_seen", sortOrder: "desc",
+        publicKeyPrefix: prefix.toLowerCase()
       };
-      if (isLong) query.publicKeyPrefix = prefix.toLowerCase();
-      else query.shortId = prefix;
       const response = await fetchWithRetry("/proxy/mc-radar/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2522,7 +2532,7 @@
         throw new Error(`MC Radar search returned HTTP ${response.status}`);
       }
       const data = await response.json();
-      let nodes = (data.nodes || []).map((node) => ({
+      const nodes = (data.nodes || []).map((node) => ({
         key: node.public_key,
         public_key: node.public_key,
         shortId: node.short_id,
@@ -2534,11 +2544,12 @@
         lon: node.location?.longitude,
         link_count: Number(node.link_count || 0)
       })).filter((node) => Number.isFinite(node.lat) && Number.isFinite(node.lon));
-      if (isLong) {
-        const pl = prefix.toLowerCase();
-        nodes = nodes.filter((n) => (n.public_key || "").toLowerCase().startsWith(pl));
-      }
-      return nodes;
+      // Belt and braces: the API already narrows by publicKeyPrefix, so this
+      // is a no-op against a well-behaved upstream. It used to run for long
+      // prefixes only; now that both lengths take the same path it applies to
+      // both, and it is what would catch a future upstream loosening the match.
+      const wanted = prefix.toLowerCase();
+      return nodes.filter((node) => (node.public_key || "").toLowerCase().startsWith(wanted));
     }
 
     async function fetchMcRadarNodeByPublicKey(publicKey) {
@@ -2962,12 +2973,18 @@
       try {
         let matches = [];
         let discoverySource = "MC Radar";
+        let fellBackToGlobalNodes = false;
         clearCandidateList();
         try {
           const r1 = (await Promise.all(hop1.map((e) => fetchMcRadarNodesByPrefix(e.prefix)))).flat();
           const r2 = (await Promise.all(hop2.map((e) => fetchMcRadarNodesByPrefix(e.prefix)))).flat();
           matches = [...tagHop(r1, 1, w1), ...tagHop(r2, 2, w2)];
         } catch (error) {
+          // One failing prefix takes the whole mc-radar batch down with it,
+          // including prefixes that resolved fine — both Promise.all calls sit
+          // inside this single try. Acceptable while the fallback covers the
+          // same ground, but it is why a partial upstream breakage looks total.
+          fellBackToGlobalNodes = true;
           const globalNodes = await fetchGlobalMeshcoreNodes();
           const pick = (weighted, hop, wmap) => globalNodes.flatMap((node) => {
             const pk = (node.public_key || node.key || "").toLowerCase();
@@ -3031,10 +3048,17 @@
         currentRfAnchors = [];
         currentResolvedContext = null;
         fitMapToCandidates(components);
+        // Say so when the primary source failed. This degradation used to be
+        // invisible — discoverySource was recorded on every candidate and then
+        // never rendered — so an upstream API change could take out the whole
+        // mc-radar path while the result still looked entirely normal (#48).
+        const sourceNote = fellBackToGlobalNodes
+          ? " MC Radar did not answer, so these came from the MeshCore map instead — coverage and link counts may differ."
+          : "";
         if (components.length > 1) {
-          discoverStatus.textContent = `Found ${components.length} candidate clusters using a ${radiusKm.toFixed(0)} km radius. They are shown on the map; pick one below to pull proven links and continue to Step 3.`;
+          discoverStatus.textContent = `Found ${components.length} candidate clusters using a ${radiusKm.toFixed(0)} km radius. They are shown on the map; pick one below to pull proven links and continue to Step 3.${sourceNote}`;
         } else {
-          discoverStatus.textContent = `Found 1 candidate cluster using a ${radiusKm.toFixed(0)} km radius. It is shown on the map; pick it below to pull proven links and continue to Step 3.`;
+          discoverStatus.textContent = `Found 1 candidate cluster using a ${radiusKm.toFixed(0)} km radius. It is shown on the map; pick it below to pull proven links and continue to Step 3.${sourceNote}`;
         }
       } catch (error) {
         if (runId !== discoveryRunId) {

@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-17-mcradar-prefix-lookup",
+    "date": "2026-08-17",
+    "title": "Repeater lookups working again",
+    "body": "Searching by a 2-character prefix had stopped reaching MC Radar and was quietly falling back to a different dataset. It now uses the current API, and the app says so on the rare occasion it does have to fall back."
+  },
+  {
     "id": "2026-07-24-intro",
     "date": "2026-07-24",
     "title": "A short guide for newcomers",

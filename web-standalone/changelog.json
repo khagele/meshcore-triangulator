@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-17-plausible-link-ranges",
+    "date": "2026-08-17",
+    "title": "Ignoring impossible repeater links",
+    "body": "Each repeater's assumed coverage is worked out from the links it is known to have. Some of those links were hundreds of kilometres long, which no single hop can be at these radio settings, and that stretched a few repeaters' assumed range past 150 km. A repeater that wide stops helping narrow anything down. Links too long to be one hop are now left out, and the tool tells you how many it ignored."
+  },
+  {
     "id": "2026-08-17-likelihood-scoring",
     "date": "2026-08-17",
     "title": "Sharper estimates from overlapping observers",

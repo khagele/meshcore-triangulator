@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-17-hull-outlines",
+    "date": "2026-08-17",
+    "title": "Range and confidence outlines drawn correctly",
+    "body": "The shaded outlines around proven-link ranges, clusters and the estimated area were collapsing to a line with no fill. They now show the real area they cover."
+  },
+  {
     "id": "2026-07-24-intro",
     "date": "2026-07-24",
     "title": "A short guide for newcomers",

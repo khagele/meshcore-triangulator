@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-17-receive-direction-radius",
+    "date": "2026-08-17",
+    "title": "Coverage now based on what a repeater can hear",
+    "body": "A repeater's assumed coverage was built from every link it takes part in, including links only ever proven in the outbound direction. Those run much longer than links proven inbound, so coverage came out too generous. Where a repeater has enough inbound evidence the coverage is now based on that alone, and where it does not the tool says so rather than pretending. Antennas and receivers differ at each end of a link, so the two directions are not interchangeable."
+  },
+  {
     "id": "2026-08-17-plausible-link-ranges",
     "date": "2026-08-17",
     "title": "Ignoring impossible repeater links",

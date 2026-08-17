@@ -1778,7 +1778,8 @@
         .filter((link) => nodeId(link.from) === id || nodeId(link.to) === id)
         .map((link) => ({
           km: haversineKm(link.from, link.to),
-          measured: linkHasMeasuredSignal(link, id)
+          measured: linkHasMeasuredSignal(link, id),
+          inbound: linkVerifiedInbound(link, id)
         }));
       const { radiusKm } = provenRadiusFromLinks(entries);
       return Number.isFinite(radiusKm) && radiusKm > 0 ? radiusKm : hop2RadiusKm();
@@ -1813,6 +1814,8 @@
     const PROVEN_LINK_MIN_CONFIDENCE = 85;
     let linkFetchSkipped = 0;
     let implausibleLinksDropped = 0;
+    let outboundLinksExcluded = 0;
+    let observersWithoutReceiveQuorum = 0;
 
     // Link-distance plausibility (#61).
     //
@@ -1870,22 +1873,58 @@
       return clamp(longestMeasured * MEASURED_CEILING_SLACK, DEFAULT_ANCHOR_RANGE_KM, MAX_PLAUSIBLE_LINK_KM);
     }
 
-    // entries: [{ km, measured }] for one node's links. Returns the p80 over the
-    // plausible ones, plus what was dropped so callers can report it instead of
-    // capping silently (same rule as PROVEN_LINK_NODE_BUDGET).
+    // A radius is evidence about what a node can HEAR, so links verified inbound
+    // to it are the right basis. Outbound-only links are measurably longer:
+    // across 1855 sampled links, `to`-only distances run median 13.3 km, p75
+    // 41.7, p90 101.8, against 8.0 / 20.9 / 58.3 for inbound-verified ones. So
+    // counting them inflates receive coverage at every percentile (#62).
+    //
+    // But restricting outright is not affordable. Inbound-only collapses the
+    // per-node sample from median 5 links to 3, puts 54% of nodes under 4 links,
+    // and leaves 18% with none at all. A p80 over 1-2 samples is noise, which is
+    // #42's failure mode, so a hard restriction would trade a known bias for a
+    // known variance problem. Hence a quorum: use inbound evidence when there is
+    // enough of it, otherwise fall back to all directions and say so.
+    //
+    // 4 is the smallest count where the interpolating p80 still straddles two
+    // real samples (rank 2.4 of 0..3) rather than resting on one.
+    const RECEIVE_QUORUM = 4;
+
+    // entries: [{ km, measured, inbound }] for one node's links. Returns the p80
+    // over the plausible ones, plus everything excluded and why, so callers can
+    // report it instead of capping silently (same rule as
+    // PROVEN_LINK_NODE_BUDGET).
     function provenRadiusFromLinks(entries) {
       const usable = entries.filter((entry) => Number.isFinite(entry.km) && entry.km > 0);
-      const ceilingKm = linkCeilingKm(usable.filter((entry) => entry.measured).map((entry) => entry.km));
-      const plausible = usable.filter((entry) => entry.km <= ceilingKm).map((entry) => entry.km);
-      const dropped = usable.length - plausible.length;
+      const inbound = usable.filter((entry) => entry.inbound);
+      const useInboundOnly = inbound.length >= RECEIVE_QUORUM;
+      const basis = useInboundOnly ? inbound : usable;
+      const excludedOutbound = useInboundOnly ? usable.length - inbound.length : 0;
+      const ceilingKm = linkCeilingKm(basis.filter((entry) => entry.measured).map((entry) => entry.km));
+      const plausible = basis.filter((entry) => entry.km <= ceilingKm).map((entry) => entry.km);
+      const dropped = basis.length - plausible.length;
+      const shape = { dropped, excludedOutbound, ceilingKm, usedInboundOnly: useInboundOnly };
       if (!plausible.length) {
-        return { radiusKm: null, dropped, ceilingKm };
+        return { radiusKm: null, ...shape };
       }
       return {
         radiusKm: Math.max(2, percentile(plausible, PROVEN_RADIUS_PERCENTILE)),
-        dropped,
-        ceilingKm
+        ...shape
       };
+    }
+
+    // Was this link verified in the direction where `forId` is the RECEIVER?
+    // Direction is relative to the queried node, stored as link.from, so `from`
+    // means peer -> link.from and `to` means link.from -> peer.
+    //
+    // An unlabelled direction returns false. Measured cost of that strictness:
+    // 1 link in 1855 (#62). dedupeProvenLinks() treats a missing direction as
+    // forward, which is fine for drawing an arrow but is not evidence here.
+    function linkVerifiedInbound(link, forId) {
+      const direction = link.direction;
+      if (forId === nodeId(link.from)) return direction === "from" || direction === "both";
+      if (forId === nodeId(link.to)) return direction === "to" || direction === "both";
+      return false;
     }
 
     // Direction matters, and the two ends are not interchangeable. mc-radar
@@ -1903,9 +1942,9 @@
     // measurement taken at the other end of the path, and LoRa links are
     // routinely asymmetric (different antennas, power and noise floor per end).
     //
-    // Note the narrower gap this leaves: which links feed the radius at all is
-    // still direction-blind, so a link only ever verified outbound from X still
-    // counts toward X's receive coverage. Tracked separately, see #62.
+    // Which links feed the radius at all is handled by linkVerifiedInbound()
+    // above (#62); this only picks the right SNR field for a link already in the
+    // basis.
     function linkHasMeasuredSignal(link, forId) {
       if (forId === nodeId(link.from)) return Number.isFinite(link.snrFrom);
       if (forId === nodeId(link.to)) return Number.isFinite(link.snrTo);
@@ -2002,11 +2041,13 @@
         const id = nodeId(node);
         const entries = [];
         currentProvenLinks.forEach((link) => {
-          // measured is evaluated for THIS node's receive direction, which is a
-          // different signal_* field at each end of the link (#61).
+          // Both flags are evaluated for THIS node's receive direction: a
+          // different signal_* field at each end of the link (#61), and a
+          // different verified direction (#62).
           const measured = linkHasMeasuredSignal(link, id);
-          if (nodeId(link.from) === id) entries.push({ km: haversineKm(node, link.to), measured });
-          else if (nodeId(link.to) === id) entries.push({ km: haversineKm(node, link.from), measured });
+          const inbound = linkVerifiedInbound(link, id);
+          if (nodeId(link.from) === id) entries.push({ km: haversineKm(node, link.to), measured, inbound });
+          else if (nodeId(link.to) === id) entries.push({ km: haversineKm(node, link.from), measured, inbound });
         });
         // Same plausibility filter as the initial derivation (#61), so a manual
         // link edit cannot re-admit a distance the first pass rejected.
@@ -2991,6 +3032,8 @@
       const fetchTargets = fetchOrder.slice(0, PROVEN_LINK_NODE_BUDGET);
       linkFetchSkipped = Math.max(0, fetchOrder.length - fetchTargets.length);
       implausibleLinksDropped = 0;
+      outboundLinksExcluded = 0;
+      observersWithoutReceiveQuorum = 0;
       await Promise.all(fetchTargets.map(async (node) => {
         try {
           const connections = await fetchMcRadarConnections(node.public_key || node.key);
@@ -3012,22 +3055,32 @@
             // fields here as it does everywhere else (#61).
             if (knownPeer) {
               const link = buildProvenLink(node, knownPeer, connection);
-              connectionEntries.push({ km: haversineKm(node, knownPeer), measured: linkHasMeasuredSignal(link, nodeId(node)) });
+              connectionEntries.push({
+                km: haversineKm(node, knownPeer),
+                measured: linkHasMeasuredSignal(link, nodeId(node)),
+                inbound: linkVerifiedInbound(link, nodeId(node))
+              });
               provenLinks.push(link);
               return;
             }
             const resolved = await fetchMcRadarNodeByPublicKey(peerKey);
             if (resolved) {
               const link = buildProvenLink(node, resolved, connection);
-              connectionEntries.push({ km: haversineKm(node, resolved), measured: linkHasMeasuredSignal(link, nodeId(node)) });
+              connectionEntries.push({
+                km: haversineKm(node, resolved),
+                measured: linkHasMeasuredSignal(link, nodeId(node)),
+                inbound: linkVerifiedInbound(link, nodeId(node))
+              });
               supportNodeMap.set(peerKey, { ...resolved, weight: 0.6 });
               provenLinks.push(link);
             }
           }));
           // Implausible distances are excluded before the percentile, and the
           // count is reported rather than dropped silently (#61).
-          const { radiusKm, dropped } = provenRadiusFromLinks(connectionEntries);
+          const { radiusKm, dropped, excludedOutbound, usedInboundOnly } = provenRadiusFromLinks(connectionEntries);
           implausibleLinksDropped += dropped;
+          outboundLinksExcluded += excludedOutbound;
+          if (!usedInboundOnly && connectionEntries.length) observersWithoutReceiveQuorum += 1;
           if (Number.isFinite(radiusKm)) {
             node.provenRadiusKm = radiusKm;
           }
@@ -3107,9 +3160,21 @@
         : "";
       // Same rule for the plausibility filter: a dropped link is reported, never
       // silent (#61).
-      const implausibleNote = implausibleLinksDropped
-        ? ` Ignored ${implausibleLinksDropped} proven link${implausibleLinksDropped === 1 ? "" : "s"} as too long for one hop (ceiling ${MAX_PLAUSIBLE_LINK_KM} km, tighter on nodes with measured signal).`
-        : "";
+      // One consolidated clause list rather than a separate sentence per rule.
+      // This line already carries the hull and dedupe notes, and three more
+      // appended sentences read as a wall. Nothing is capped silently (#38,
+      // #61, #62).
+      const radiusNotes = [];
+      if (implausibleLinksDropped) {
+        radiusNotes.push(`${implausibleLinksDropped} link${implausibleLinksDropped === 1 ? "" : "s"} too long for one hop (over ${MAX_PLAUSIBLE_LINK_KM} km)`);
+      }
+      if (outboundLinksExcluded) {
+        radiusNotes.push(`${outboundLinksExcluded} outbound-only link${outboundLinksExcluded === 1 ? "" : "s"} excluded`);
+      }
+      if (observersWithoutReceiveQuorum) {
+        radiusNotes.push(`${observersWithoutReceiveQuorum} observer${observersWithoutReceiveQuorum === 1 ? "" : "s"} had under ${RECEIVE_QUORUM} inbound links, so used all directions`);
+      }
+      const implausibleNote = radiusNotes.length ? ` Coverage radii: ${radiusNotes.join("; ")}.` : "";
       clusterStatus.textContent = `Cluster near ${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}: ${uniquePrefixCount(dedupedNodes)} observers active.${hullNote}${dedupNote}${linkCapNote}${implausibleNote}`;
       syncClusterEditorFromLockedRegion();
       setDiscoveryCollapsed(true);

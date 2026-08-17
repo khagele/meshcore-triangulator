@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-17-likelihood-scoring",
+    "date": "2026-08-17",
+    "title": "Sharper estimates from overlapping observers",
+    "body": "Observers are now combined by asking where all of them agree, rather than letting the loudest one outvote the rest. Estimates land about 16% closer in testing, and the heat map now shows where the answer is uncertain instead of looking the same everywhere."
+  },
+  {
     "id": "2026-08-17-hull-outlines",
     "date": "2026-08-17",
     "title": "Range and confidence outlines drawn correctly",

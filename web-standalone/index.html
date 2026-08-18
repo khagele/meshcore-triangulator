@@ -2568,7 +2568,11 @@
     // #69 showed a finer grid does not move the error, so it would buy nothing.
     const ESTIMATE_DECIMALS = 3;
     const ESTIMATE_TYPICAL_ERROR_KM = 2;
-    const ESTIMATE_UNCERTAINTY_NOTE = `Read it as an area, not a pinpoint: cells are about 0.8 km across, and in testing the estimate landed a median ${ESTIMATE_TYPICAL_ERROR_KM} km from the true position, further when no observer was close.`;
+    // Kept to one short clause. This string is appended to a status line that
+    // already carries hull, dedupe and link-exclusion notes, and it reprints on
+    // every estimate, so a paragraph here is a paragraph nobody reads. The
+    // reasoning lives in the comment above, not on screen.
+    const ESTIMATE_UNCERTAINTY_NOTE = `Typical error ${ESTIMATE_TYPICAL_ERROR_KM} km, more when no observer is close.`;
 
     function formatEstimateLatLon(point) {
       return `${point.lat.toFixed(ESTIMATE_DECIMALS)}, ${point.lon.toFixed(ESTIMATE_DECIMALS)}`;
@@ -2624,7 +2628,7 @@
           weight: 1.5,
           fillColor: "#ffd166",
           fillOpacity: 0.75
-        }).bindPopup(`${label}<br>${formatEstimateLatLon(point)}<br>±${ESTIMATE_TYPICAL_ERROR_KM} km typical`).addTo(terrainLayer);
+        }).bindPopup(`${label}<br>${formatEstimateLatLon(point)}<br>typical error ${ESTIMATE_TYPICAL_ERROR_KM} km`).addTo(terrainLayer);
       });
       // Keep an open 3D view in sync with the freshly computed estimate.
       refresh3dData();

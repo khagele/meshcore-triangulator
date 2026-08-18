@@ -30,3 +30,6 @@ venv/
 # Terrain DEM tiles
 dem/
 *.tif
+
+# Fixture regeneration cache (web-standalone/tools)
+.cache/

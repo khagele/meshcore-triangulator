@@ -22,7 +22,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, "..", "index.html"), "utf8");
+// --source points the extraction at a different index.html, so a variant can be
+// measured without editing the working tree. Used for parameter sweeps.
+const argv = process.argv.slice(2);
+const sourceArg = argv.indexOf("--source");
+const sourcePath = sourceArg !== -1 && argv[sourceArg + 1]
+  ? argv[sourceArg + 1]
+  : join(here, "..", "index.html");
+const source = readFileSync(sourcePath, "utf8");
 const fixture = JSON.parse(readFileSync(join(here, "fixtures", "accuracy-cases.json"), "utf8"));
 
 function grab(pattern, label) {
@@ -175,6 +182,7 @@ for (const testCase of fixture.cases) {
 }
 
 const errors = results.map((r) => r.errorKm);
+console.log(`source: ${sourcePath}`);
 console.log(`fixture: ${fixture.cases.length} cases, generated ${fixture.generated}`);
 console.log(`grid: ${latStep} x ${lonStep} deg, pad ${latPad} / ${lonPad}; cluster ${CLUSTER_KM} km`);
 console.log(`scored ${results.length}, skipped ${skipped.length} whose rank-1 cluster was a single node`);
@@ -197,7 +205,7 @@ console.log();
 report("  nearest observer < 5 km", results.filter((r) => r.nearestObserverKm < 5).map((r) => r.errorKm));
 report("  nearest observer >= 5 km", results.filter((r) => r.nearestObserverKm >= 5).map((r) => r.errorKm));
 
-const args = process.argv.slice(2);
+const args = argv;
 const baselineIndex = args.indexOf("--baseline");
 if (baselineIndex !== -1 && args[baselineIndex + 1]) {
   writeFileSync(args[baselineIndex + 1], JSON.stringify(results, null, 1));

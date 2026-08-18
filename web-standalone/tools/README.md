@@ -25,6 +25,17 @@ node web-standalone/tools/accuracy.mjs --compare /tmp/before.json
 The comparison names the worst regressions individually, because a summary
 statistic hides exactly the cases worth looking at.
 
+To measure a variant without touching the working tree, point the extraction at
+another copy:
+
+```
+sed 's/COVERAGE_EDGE_SHARPNESS = 6/COVERAGE_EDGE_SHARPNESS = 3/' \
+  web-standalone/index.html > /tmp/variant.html
+node web-standalone/tools/accuracy.mjs --source /tmp/variant.html
+```
+
+That is how the parameter sweeps in #69 were run.
+
 The scoring functions are extracted from `index.html` at runtime rather than
 reimplemented, so the harness cannot drift from what ships. If a rename breaks
 an extraction the tool fails loudly rather than silently measuring nothing.

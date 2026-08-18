@@ -1268,6 +1268,14 @@
 
     const REPEATER_ANTENNA_HEIGHT_M = 12;
     const TARGET_ANTENNA_HEIGHT_M = 1.5;
+    // Swept against the accuracy fixture (#53, #69): 2 km to 20 km moves median
+    // error 1.9 -> 2.0 km and p90 9.0 -> 9.1 km. This constant is inert. Error
+    // is set by observer geometry, not by assumed coverage size.
+    //
+    // Do NOT "fix" it downward from an SF7 link budget. That derivation looks
+    // persuasive and gives ~4-6 km, but measured links with a real reception
+    // reach 62 km, and either way it changes nothing measurable. Re-run
+    // tools/accuracy.mjs before touching this.
     const DEFAULT_ANCHOR_RANGE_KM = 12;
     // One definition of "proven coverage radius", used by BOTH derivation
     // sites. They disagreed before — p80 after a link edit, p95 during
@@ -2347,6 +2355,9 @@
       if (Number.isFinite(anchor.provenRadiusKm) && anchor.provenRadiusKm > 0) {
         return Math.max(2, anchor.provenRadiusKm);
       }
+      // The 22 km cap sits near p80 of physically credible links. Like
+      // DEFAULT_ANCHOR_RANGE_KM it was swept and does not move the estimate
+      // (#53), so it stays where the link evidence puts it.
       const dynamic = Math.max(DEFAULT_ANCHOR_RANGE_KM, Math.min((anchor.link_count || 0) * 0.8, 22));
       return dynamic;
     }

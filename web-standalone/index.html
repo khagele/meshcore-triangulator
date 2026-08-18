@@ -3222,7 +3222,7 @@
         ? ` Proven links did not separate ${dupCentroidDecided} prefix${dupCentroidDecided === 1 ? "" : "es"}, so the node nearest the cluster centre was kept. That pick biases the estimate toward the centre.`
         : "";
       const dedupNote = dupRemoved.length
-        ? ` Auto-removed ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"} — review in the list below.${dupGuessNote}`
+        ? ` Auto-removed ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"}, review in the list below.${dupGuessNote}`
         : "";
       // Never let a coverage cap look like "there was nothing more" (#38).
       const linkCapNote = linkFetchSkipped

@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-18-estimate-precision",
+    "date": "2026-08-18",
+    "title": "Estimates no longer look more precise than they are",
+    "body": "The estimated position was printed to five decimals, about a metre, while the search behind it works in squares of roughly 800 metres and testing against known positions puts the answer a median 2 km out. Coordinates are now shown to three decimals, and the tool says how far off it typically lands, so the result reads as an area to search rather than a doorstep."
+  },
+  {
     "id": "2026-08-17-receive-direction-radius",
     "date": "2026-08-17",
     "title": "Coverage now based on what a repeater can hear",

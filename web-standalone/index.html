@@ -619,10 +619,29 @@
       margin-top: 12px;
     }
 
-    .candidate-card {
+    /* A candidate card is a selectable LIST ITEM, not a primary action, so it
+       gets a quiet surface with a selected state. Every selector here is
+       scoped under .step-panel deliberately: the cards are <button> elements
+       inside the step panel, and `.step-panel button` (0,1,1) outspecifies a
+       bare `.candidate-card` (0,1,0). Unscoped, the accent-green primary
+       button styling won and painted --muted detail text on --accent at
+       1.20:1, which is invisible (#73). Keep the .step-panel prefix on any
+       rule added below. */
+    /* RECESSED, not raised: the surface is a dark tint rather than the usual
+       white wash. The panel column is translucent over body's own gradient,
+       and under the top-left teal radial a white-wash card leaves --muted
+       detail text at 4.19:1 on hover and 3.84:1 when selected, i.e. below AA
+       in exactly the region step 2 occupies. Darkening instead of lightening
+       makes the card's contrast independent of where the panel lands on that
+       gradient: --muted measures >= 5.2:1 in every state, in the worst zone. */
+    .step-panel .candidate-card {
       width: 100%;
+      /* .step-panel button adds margin-top: 12px; .candidate-list is a grid
+         with its own gap, so the inherited margin would double the spacing. */
+      margin-top: 0;
       text-align: left;
-      background: rgba(255, 255, 255, 0.04);
+      font-weight: 400;
+      background: rgba(7, 17, 24, 0.45);
       color: var(--text);
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 14px;
@@ -630,22 +649,43 @@
       cursor: pointer;
     }
 
-    .candidate-card.is-selected {
-      border-color: rgba(155, 229, 100, 0.5);
-      background: rgba(155, 229, 100, 0.14);
+    /* filter: none overrides `.step-panel button:hover`'s brightness(1.06),
+       which is near-invisible on a surface this dark. Hover lifts the card
+       towards the panel rather than washing it white. */
+    .step-panel .candidate-card:hover {
+      background: rgba(7, 17, 24, 0.30);
+      border-color: rgba(255, 255, 255, 0.22);
+      filter: none;
     }
 
-    .candidate-card strong,
-    .candidate-card span {
+    /* Same lime as .workflow-step.is-active: this is the cluster being worked
+       on. The inset bar carries the state on its own, so the tint never has to
+       be strong enough to hurt the text sitting on it. */
+    .step-panel .candidate-card.is-selected {
+      border-color: rgba(155, 229, 100, 0.55);
+      /* Two layers, not two colours: the lime wash sits ON the same dark
+         tint as a resting card, so selection changes the hue without
+         giving back the contrast the dark tint bought. */
+      background:
+        linear-gradient(rgba(155, 229, 100, 0.12), rgba(155, 229, 100, 0.12)),
+        rgba(7, 17, 24, 0.45);
+      box-shadow: inset 3px 0 0 rgba(155, 229, 100, 0.8);
+    }
+
+    .step-panel .candidate-card strong,
+    .step-panel .candidate-card span {
       display: block;
     }
 
-    .candidate-card strong {
+    .step-panel .candidate-card strong {
       font-size: 0.88rem;
+      font-weight: 700;
       margin-bottom: 3px;
     }
 
-    .candidate-card span {
+    /* --muted measured against the composited card surface: 7.01:1 at rest,
+       6.41:1 on hover, 5.25:1 selected, taking the worst backdrop zone. */
+    .step-panel .candidate-card span {
       color: var(--muted);
       font-size: 0.8rem;
       line-height: 1.35;
@@ -3378,13 +3418,19 @@
         const centroid = centroidOfNodes(candidate.nodes);
         const button = document.createElement("button");
         button.type = "button";
-        button.className = `candidate-card${candidate.id === selectedCandidateRegionId ? " is-selected" : ""}`;
+        const isSelected = candidate.id === selectedCandidateRegionId;
+        button.className = `candidate-card${isSelected ? " is-selected" : ""}`;
+        // The cards are a single-select list built out of <button>s, so the
+        // selected one needs to say so to a screen reader, not only in paint.
+        button.setAttribute("aria-pressed", String(isSelected));
         button.innerHTML = `
           <strong>Region ${candidate.rank}</strong>
           <span>${uniquePrefixCount(candidate.nodes)} clue prefixes, ${candidate.nodes.length} hits</span>
           <span>${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)} · radius ${candidate.radiusKm.toFixed(0)} km · span ${candidate.maxPairKm.toFixed(1)} km</span>
         `;
         button.addEventListener("click", () => {
+          // Live comparison, not the captured isSelected: the flag above is a
+          // render-time snapshot and this handler outlives the render.
           if (candidate.id === selectedCandidateRegionId) {
             return;
           }

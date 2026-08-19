@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-cluster-card-contrast",
+    "date": "2026-08-19",
+    "title": "Cluster cards are readable again",
+    "body": "The cluster cards in step 2 were being painted in the same green as the main action button, which left the line under each cluster name, the one carrying how many prefixes and hits it has, almost invisible against it. That was a styling mistake rather than a choice. The cards are now a quiet dark tile, the cluster you have picked is marked with a green edge, and every line on them is comfortably readable wherever the panel sits on the page."
+  },
+  {
     "id": "2026-08-18-terrain-line-of-sight",
     "date": "2026-08-18",
     "title": "Better line-of-sight checks, and honesty about the gaps",

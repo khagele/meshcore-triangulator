@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-terrain-partial-cover",
+    "date": "2026-08-19",
+    "title": "Places the height data cannot see no longer win by default",
+    "body": "The terrain check skips any path it has no height data for, over open water or across the border. Skipping was free, so a spot the data could not see at all came out ahead of a spot the data had looked at and found blocked by a hill. Along the coast, the IJsselmeer and the borders that pushed answers offshore. Where only some paths can be checked, what those paths show is now taken to apply to the rest as well, so a spot judged on one path is compared fairly with a spot judged on five. Inland, where every path can be checked, nothing changes."
+  },
+  {
     "id": "2026-08-19-cluster-card-contrast",
     "date": "2026-08-19",
     "title": "Cluster cards are readable again",

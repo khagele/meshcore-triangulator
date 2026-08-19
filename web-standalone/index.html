@@ -2695,28 +2695,60 @@
     //     entirely, which could jump the argmax between adjacent cells for no
     //     physical reason. It has no likelihood interpretation to carry over.
     //
-    // Anchors whose path terrain is unknown abstain: they contribute 0, so an
-    // unmeasurable path neither helps nor hurts a cell (#58). Known bias of
-    // that rule: every term here is <= 0, so a cell with NO terrain data at
-    // all scores 0, which is the best score on offer. Where the candidate grid
-    // straddles the AHN edge (coast, large water, the Belgian and German
-    // border) an unmeasurable cell can therefore outrank an inland cell whose
-    // paths are measurably obstructed. That is the honest consequence of
-    // refusing to invent a value for missing data, and the fix is terrain
-    // cover for those cells rather than a number made up for them (#72).
-    // Where NOTHING is measurable the term is 0 everywhere, so the terrain
-    // pass simply leaves the flat ranking alone, which is the intended
-    // behaviour.
+    // Anchors whose path terrain is unknown abstain rather than being assigned
+    // an invented 0.55 (#58). Abstention alone was not enough, because every
+    // term here is <= 0: a contribution of exactly 0 is the BEST score on
+    // offer, so a cell with no terrain data outranked one whose paths terrain
+    // had examined and found blocked. Where the candidate grid straddles the
+    // AHN edge (the coast, the IJsselmeer, the Belgian and German borders) a
+    // cell just offshore could beat an inland cell on the terrain pass by
+    // being unmeasurable (#72).
+    //
+    // So the measured anchors are extrapolated to the unmeasured ones: take
+    // the mean log-factor per unit of weight that ANSWERED, and apply it to
+    // the total weight. A cell judged on 1 of 5 paths is then scored on the
+    // same scale as one judged on 5 of 5, instead of banking 4 free zeroes.
+    //
+    // Two properties worth keeping in mind:
+    //
+    //   - Where every anchor answers, answeredWeight === totalWeight and the
+    //     scale factor is exactly 1. This is a strict no-op over the AHN
+    //     interior, which is nearly every cell of nearly every search. Only
+    //     partially-measurable cells move.
+    //   - The flip side is amplification: 1 answering anchor out of 8 has its
+    //     single measurement multiplied by 8, so a thin measurement carries as
+    //     much weight as a thorough one. That is the honest reading of "assume
+    //     the paths we cannot see look like the ones we can", and it is still
+    //     better than the alternative of treating unseen paths as ideal, but
+    //     it is an imputation and not a measurement.
+    //
+    // Where NOTHING is measurable the term stays 0 everywhere, so the terrain
+    // pass leaves the flat ranking alone, which is the intended behaviour.
+    //
+    // NOT MEASURED. accuracy.mjs (#68) does not run the terrain pass at all,
+    // so this is argued from the shape of the objective rather than shown to
+    // help. Closing that gap is the prerequisite for tuning any of it (#57).
     async function terrainAnchorScore(point) {
       const anchors = currentRfAnchors.length ? currentRfAnchors : currentMatchedNodes;
-      const logFactors = await Promise.all(anchors.map(async (anchor) => {
+      const terms = await Promise.all(anchors.map(async (anchor) => {
+        const weight = anchor.weight || 1;
         const los = await terrainLosFactor(anchor, point);
         if (los === null) {
-          return 0;
+          return { weight, logFactor: null };
         }
-        return (anchor.weight || 1) * Math.log(TERRAIN_LOS_FLOOR + ((1 - TERRAIN_LOS_FLOOR) * los));
+        return {
+          weight,
+          logFactor: weight * Math.log(TERRAIN_LOS_FLOOR + ((1 - TERRAIN_LOS_FLOOR) * los))
+        };
       }));
-      return logFactors.reduce((sum, value) => sum + value, 0);
+      const totalWeight = terms.reduce((sum, term) => sum + term.weight, 0);
+      const answered = terms.filter((term) => term.logFactor !== null);
+      const answeredWeight = answered.reduce((sum, term) => sum + term.weight, 0);
+      if (!answeredWeight) {
+        return 0;
+      }
+      const measured = answered.reduce((sum, term) => sum + term.logFactor, 0);
+      return measured * (totalWeight / answeredWeight);
     }
 
     // How a POSITION ESTIMATE is printed to the operator (#56).

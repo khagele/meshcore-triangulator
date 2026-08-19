@@ -8,7 +8,7 @@
   {
     "id": "2026-08-18-duplicate-prefix-guess",
     "date": "2026-08-18",
-    "title": "Estimates no longer look more precise than they are",
+    "title": "Says when a duplicate repeater was picked by guesswork",
     "body": "Two real repeaters can share the same 2-character prefix, and the tool has to pick one of them. Where there is a proven link it goes on that. Where there is not, it keeps whichever sits closest to the middle of the cluster, which is a guess, and a guess that pulls the estimate toward that middle. The cluster line now says how many prefixes were settled that way, so you can check those in the list below and swap the pick yourself."
   },
   {

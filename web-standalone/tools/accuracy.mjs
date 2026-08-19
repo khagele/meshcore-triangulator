@@ -7,6 +7,14 @@
 //   node web-standalone/tools/accuracy.mjs
 //   node web-standalone/tools/accuracy.mjs --baseline out.json   # write results
 //   node web-standalone/tools/accuracy.mjs --compare out.json    # diff vs a run
+//   node web-standalone/tools/accuracy.mjs --hop1-only           # drop 2nd hop
+//
+// Cases carry 1st- AND 2nd-hop observers. 2nd-hop nodes are built the way
+// runCaseDiscovery()/applyHopRadii() build them (SECOND_HOP_WEIGHT_FACTOR on the
+// weight, the 2nd-hop km input as hopRadiusKm), so the paths #46, #65, #66 and
+// #67 are about are actually entered. --hop1-only re-runs without them,
+// which is how you tell "this change did nothing" from "this change was never
+// exercised": the two runs must differ.
 //
 // The scoring functions are EXTRACTED FROM index.html rather than reimplemented,
 // so this cannot drift from what ships. Only the grid sweep is mirrored here,
@@ -53,6 +61,7 @@ const extracted = [
   grab(/function linkCeilingKm\(measuredDistances\) \{[\s\S]*?\n    \}/, "linkCeilingKm"),
   grab(/function provenRadiusFromLinks\(entries\) \{[\s\S]*?\n    \}/, "provenRadiusFromLinks"),
   grab(/function anchorRangeKm\(anchor\) \{[\s\S]*?\n    \}/, "anchorRangeKm"),
+  grab(/const SECOND_HOP_WEIGHT_FACTOR = [\d.]+;/, "SECOND_HOP_WEIGHT_FACTOR"),
   grab(/const COVERAGE_EDGE_SHARPNESS = \d+;/, "COVERAGE_EDGE_SHARPNESS"),
   grab(/function coverageLikelihood\(distanceKm, rangeKm\) \{[\s\S]*?\n    \}/, "coverageLikelihood"),
   grab(/const MIN_OBSERVATION_LIKELIHOOD = [\de.-]+;/, "MIN_OBSERVATION_LIKELIHOOD"),
@@ -62,7 +71,8 @@ const extracted = [
 ];
 
 const estimator = new Function(`${extracted.join("\n")}
-  return { scorePoint, anchorRangeKm, haversineKm, provenRadiusFromLinks, connectedComponents };`)();
+  return { scorePoint, anchorRangeKm, haversineKm, provenRadiusFromLinks, connectedComponents,
+           SECOND_HOP_WEIGHT_FACTOR };`)();
 
 // The app never estimates over a raw observer list. Discovery clusters the
 // resolved candidates first and the operator locks ONE region, so the estimator
@@ -74,11 +84,21 @@ const estimator = new Function(`${extracted.join("\n")}
 // Default cluster km from the UI. Chaining is transitive, so this is not a cap
 // on observer spread: a line of observers 5 km apart still forms one component.
 const CLUSTER_KM = Number(grab(/id="region-radius-input"[^>]*value="(\d+)"/, "cluster km").match(/value="(\d+)"/)[1]);
+// Default 2nd-hop km from the UI, i.e. what hop2RadiusKm() returns untouched.
+// It is both the coverage radius stamped on a 2nd-hop node and the wide
+// clustering threshold any edge touching one is allowed (#65, #66).
+const HOP2_KM = Number(grab(/id="hop2-radius-input"[^>]*value="(\d+)"/, "2nd-hop km").match(/value="(\d+)"/)[1]);
 
-// Rank-1 region as the app would show it: most observers, then tightest.
+// Rank-1 region as the app would show it: most observer weight, then tightest.
+// The wide threshold matches runCaseDiscovery(), which passes hop2RadiusKm().
+// Weight rather than raw count because componentScore()'s leading term is the
+// weighted one: a 2nd-hop node counts 0.3, so a loose knot of 2nd-hop nodes does
+// not outrank the direct evidence. With 1st-hop only the two are identical.
+const clusterWeight = (nodes) => nodes.reduce((sum, node) => sum + node.weight, 0);
 function largestCluster(observers) {
-  const components = estimator.connectedComponents(observers, CLUSTER_KM, CLUSTER_KM);
-  components.sort((a, b) => b.nodes.length - a.nodes.length || a.maxPairKm - b.maxPairKm);
+  const components = estimator.connectedComponents(observers, CLUSTER_KM, HOP2_KM);
+  components.sort((a, b) =>
+    clusterWeight(b.nodes) - clusterWeight(a.nodes) || a.maxPairKm - b.maxPairKm);
   return components[0].nodes;
 }
 
@@ -106,17 +126,26 @@ function estimate(observers) {
   return best;
 }
 
-// Weight is times-heard. The fixture has one reception per observer, so 1.
+// Weight is times-heard. The fixture has one reception per observer, so 1,
+// times SECOND_HOP_WEIGHT_FACTOR at hop 2 exactly as tagHop() does.
 // provenRadiusKm is derived with the shipped helper where the observer's own
 // links were cached, else anchorRangeKm() falls through to the link_count tier,
 // which is what the app does for observers outside its fetch budget.
-function prepare(observers) {
+function prepare(observers, hop) {
   return observers.map((o) => {
-    const node = { lat: o.lat, lon: o.lon, weight: 1, link_count: o.link_count };
+    const node = {
+      lat: o.lat, lon: o.lon, hop, link_count: o.link_count,
+      weight: hop === 2 ? estimator.SECOND_HOP_WEIGHT_FACTOR : 1
+    };
     if (o.links && o.links.length) {
       const { radiusKm } = estimator.provenRadiusFromLinks(o.links);
       if (Number.isFinite(radiusKm)) node.provenRadiusKm = radiusKm;
     }
+    // applyHopRadii(): 2nd-hop nodes carry the hop input, 1st-hop nodes carry
+    // none. anchorRangeKm() reads hopRadiusKm FIRST, so this also suppresses
+    // any provenRadiusKm set just above. That precedence is #67's point 3, and
+    // it is only visible here because the fixture now has both.
+    if (hop === 2) node.hopRadiusKm = HOP2_KM;
     return node;
   });
 }
@@ -142,10 +171,15 @@ function report(label, errors) {
   );
 }
 
+const hop1Only = argv.includes("--hop1-only");
 const results = [];
 const skipped = [];
 for (const testCase of fixture.cases) {
-  const clustered = largestCluster(prepare(testCase.observers));
+  const secondHop = hop1Only ? [] : (testCase.secondHopObservers || []);
+  const clustered = largestCluster([
+    ...prepare(testCase.observers, 1),
+    ...prepare(secondHop, 2)
+  ]);
   // A case whose rank-1 cluster is a lone node has no geometry to solve. The
   // app would not offer an estimate either, so scoring it would flatter or
   // punish the estimator for something it never sees.
@@ -155,7 +189,14 @@ for (const testCase of fixture.cases) {
   }
   const best = estimate(clustered);
   const errorKm = estimator.haversineKm(best, testCase.target);
-  const clusterDistances = clustered.map((o) => estimator.haversineKm(o, testCase.target));
+  // Geometry strata below stay a statement about the DIRECT evidence, so they
+  // are measured over the 1st-hop members of the cluster. A 2nd-hop node 3 km
+  // out does not pin the target the way a 1st-hop one does, and letting it into
+  // "nearest observer < 5 km" would move cases between strata for no reason
+  // connected to accuracy.
+  const direct = clustered.filter((o) => o.hop !== 2);
+  const clusterDistances = (direct.length ? direct : clustered)
+    .map((o) => estimator.haversineKm(o, testCase.target));
   // Naive baselines. If the estimator cannot beat the centroid of the observers
   // it is not earning its complexity, and any future change should be judged
   // against the same yardstick rather than only against its predecessor.
@@ -173,7 +214,12 @@ for (const testCase of fixture.cases) {
     // possible reading of "heard by the shortest-range node".
     tightestObserverErrorKm: estimator.haversineKm(tightest, testCase.target),
     observerCount: clustered.length,
-    droppedByClustering: testCase.observers.length - clustered.length,
+    // In the fixture vs in the cluster actually scored. A case can carry 2nd-hop
+    // observers and still score none of them, which is not the same thing as
+    // having none: only the second number means the 2nd-hop paths ran.
+    secondHopOffered: secondHop.length,
+    secondHopScored: clustered.filter((o) => o.hop === 2).length,
+    droppedByClustering: testCase.observers.length + secondHop.length - clustered.length,
     maxObserverKm: Math.max(...clusterDistances),
     // Distance from the target to its nearest observer. A useful floor: no
     // estimator can do better than the geometry allows.
@@ -184,7 +230,12 @@ for (const testCase of fixture.cases) {
 const errors = results.map((r) => r.errorKm);
 console.log(`source: ${sourcePath}`);
 console.log(`fixture: ${fixture.cases.length} cases, generated ${fixture.generated}`);
-console.log(`grid: ${latStep} x ${lonStep} deg, pad ${latPad} / ${lonPad}; cluster ${CLUSTER_KM} km`);
+const offeredCases = fixture.cases.filter((c) => (c.secondHopObservers || []).length).length;
+const offeredNodes = fixture.cases.reduce((sum, c) => sum + (c.secondHopObservers || []).length, 0);
+console.log(`2nd-hop in fixture: ${offeredNodes} observers across ${offeredCases} cases` +
+  (hop1Only ? " (ignored, --hop1-only)" : ""));
+console.log(`grid: ${latStep} x ${lonStep} deg, pad ${latPad} / ${lonPad}; ` +
+  `cluster ${CLUSTER_KM} km, 2nd-hop ${HOP2_KM} km`);
 console.log(`scored ${results.length}, skipped ${skipped.length} whose rank-1 cluster was a single node`);
 const dropped = results.reduce((sum, r) => sum + r.droppedByClustering, 0);
 console.log(`observers dropped by clustering: ${dropped}\n`);
@@ -204,6 +255,17 @@ report("  has observer beyond 60 km", results.filter((r) => r.maxObserverKm > 60
 console.log();
 report("  nearest observer < 5 km", results.filter((r) => r.nearestObserverKm < 5).map((r) => r.errorKm));
 report("  nearest observer >= 5 km", results.filter((r) => r.nearestObserverKm >= 5).map((r) => r.errorKm));
+console.log();
+// The stratum that says whether a 2nd-hop change was measured at all. A change
+// to #46/#65/#66/#67 that moves nothing here moved nothing anywhere, and a
+// --compare over the whole set would have reported that as "no regression".
+const withSecond = results.filter((r) => r.secondHopScored > 0);
+report("  scored 1st-hop only", results.filter((r) => r.secondHopScored === 0).map((r) => r.errorKm));
+report("  scored some 2nd-hop", withSecond.map((r) => r.errorKm));
+const secondScored = results.reduce((sum, r) => sum + r.secondHopScored, 0);
+const secondOffered = results.reduce((sum, r) => sum + r.secondHopOffered, 0);
+console.log(`  2nd-hop observers scored: ${secondScored} of ${secondOffered} offered ` +
+  `(rest fell outside the rank-1 cluster)`);
 
 const args = argv;
 const baselineIndex = args.indexOf("--baseline");

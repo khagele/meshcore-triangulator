@@ -2314,7 +2314,7 @@
         weight: 2,
         fillColor: "#f8e45c",
         fillOpacity: 0.95
-      }).bindPopup(`Estimated clue centroid<br>${center.lat.toFixed(5)}, ${center.lon.toFixed(5)}`).addTo(map);
+      }).bindPopup(`Estimated clue centroid<br>${formatEstimateLatLon(center)}`).addTo(map);
     }
 
     function colorForScore(score) {
@@ -2552,6 +2552,32 @@
       return logFactors.reduce((sum, value) => sum + value, 0);
     }
 
+    // How a POSITION ESTIMATE is printed to the operator (#56).
+    //
+    // The estimate is the argmax of a grid that steps 0.0075 lat x 0.01 lon,
+    // so a cell is ~835 x 685 m at NL latitudes. Printing best.lat.toFixed(5)
+    // put ~1.1 m on screen and overstated the resolution ~750x. Three decimals
+    // (~110 m) still names the winning cell without inventing metres inside it.
+    //
+    // The cell size is not the error bar either. #69 measured this estimator a
+    // median 2.0 km from known target positions (p90 9.1 km, and 15.4 km median
+    // when no observer is within 5 km), so the uncertainty is said out loud
+    // next to the number instead of being left to infer from the digit count.
+    //
+    // Deliberately no coarse-to-fine refinement pass, the other half of #56:
+    // #69 showed a finer grid does not move the error, so it would buy nothing.
+    const ESTIMATE_DECIMALS = 3;
+    const ESTIMATE_TYPICAL_ERROR_KM = 2;
+    // Kept to one short clause. This string is appended to a status line that
+    // already carries hull, dedupe and link-exclusion notes, and it reprints on
+    // every estimate, so a paragraph here is a paragraph nobody reads. The
+    // reasoning lives in the comment above, not on screen.
+    const ESTIMATE_UNCERTAINTY_NOTE = `Typical error ${ESTIMATE_TYPICAL_ERROR_KM} km, more when no observer is close.`;
+
+    function formatEstimateLatLon(point) {
+      return `${point.lat.toFixed(ESTIMATE_DECIMALS)}, ${point.lon.toFixed(ESTIMATE_DECIMALS)}`;
+    }
+
     function renderLikelihoodSurface(points, label) {
       heatLayer.clearLayers();
       terrainLayer.clearLayers();
@@ -2602,7 +2628,7 @@
           weight: 1.5,
           fillColor: "#ffd166",
           fillOpacity: 0.75
-        }).bindPopup(`${label}<br>${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}`).addTo(terrainLayer);
+        }).bindPopup(`${label}<br>${formatEstimateLatLon(point)}<br>typical error ${ESTIMATE_TYPICAL_ERROR_KM} km`).addTo(terrainLayer);
       });
       // Keep an open 3D view in sync with the freshly computed estimate.
       refresh3dData();
@@ -2657,11 +2683,11 @@
         const best = top[0];
         if (useTerrain) {
           terrainStatus.textContent = best
-            ? `Terrain + LOS refinement active. Strongest candidate is ${best.lat.toFixed(5)}, ${best.lon.toFixed(5)}.`
+            ? `Terrain + LOS refinement active. Strongest candidate is near ${formatEstimateLatLon(best)}. ${ESTIMATE_UNCERTAINTY_NOTE}`
             : "Terrain + LOS refinement did not return usable candidate cells.";
         } else {
           terrainStatus.textContent = best
-            ? `Observer estimate active. Strongest candidate is ${best.lat.toFixed(5)}, ${best.lon.toFixed(5)}. You can now refine with Terrain + LOS.`
+            ? `Observer estimate active. Strongest candidate is near ${formatEstimateLatLon(best)}. ${ESTIMATE_UNCERTAINTY_NOTE} You can now refine with Terrain + LOS.`
             : "Observer estimate did not return usable candidate cells.";
         }
       } catch (error) {

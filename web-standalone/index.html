@@ -2445,8 +2445,48 @@
     // far too tight for the overlap of several observers to outscore sitting on
     // one of them. This one stays broad across the disk and falls off outside.
     // Profile, in units of the CLAMPED range used below rather than the raw hop
-    // radius: ~1.00 at 0, ~0.95 at 0.5R, 0.50 at R, ~0.05 at 1.5R.
-    const COVERAGE_EDGE_SHARPNESS = 6;
+    // radius: ~0.95 at 0, ~0.82 at 0.5R, 0.50 at R, ~0.18 at 1.5R, ~0.05 at 2R.
+    //
+    // Was 6, which put ~1.00 at 0 and ~0.95 at 0.5R: a plateau, near-constant
+    // across the whole disk. #69 argued a plateau carries little positional
+    // information, because where several disks overlap the log-likelihood is
+    // nearly flat and the argmax is decided by the smallest disk rather than by
+    // the geometry of the intersection. Measured over the accuracy fixture,
+    // n=92, and the argument holds:
+    //
+    //   k       med   p75   p90   vs centroid
+    //   6 (old) 2.9   6.8   12.4  57-32
+    //   4       2.6   5.9   12.2  61-27
+    //   3       2.4   5.8   12.2  64-23
+    //   2.5     2.5   5.7   12.0  64-24
+    //   2       2.5   5.8   12.1  64-25
+    //
+    // Everything in k = [2, 4] beats k = 6 on median, p75, p90 and head to
+    // head. A broad plateau of improvement rather than one lucky point, which
+    // is what separates a real effect from a fit to 92 cases. k = 3 sits in
+    // the middle of it.
+    //
+    // Also swept and rejected: a power law 1/(1+(d/R)^b). Its best point,
+    // b = 1.5, has the lowest median seen anywhere (2.1) but its neighbours
+    // bounce (2.5 at b=1.25, 2.2 at b=1.75, 2.5 at b=2) and its p90 is worse,
+    // 12.1 to 13.4. A noisy curve with one good point is a fit, not a finding.
+    // A Gaussian and a plain exponential in d land with the softer logistics
+    // and add nothing a constant change does not.
+    //
+    // Checked against --hop1-only, where the softer kernel is neutral to
+    // slightly better (med 2.2 to 2.3, p75 6.2 -> 5.7, head to head 43-38 ->
+    // 44-36). The gain comes from the 2nd-hop paths this fixture added, and
+    // nothing regresses where those are absent.
+    //
+    // This tuning is only measurable at all because the surface has structure
+    // to reshape. On the 1st-hop-only fixture it did not: the whole searched
+    // grid spanned a median 0.34 nats with 100% of it tied with the winner, so
+    // every kernel scored the same and the argmax was arbitrary. With 2nd-hop
+    // observers the median span is 28 nats and 6% of the grid ties. The hard
+    // stratum is still nearly flat (3.8 nats, 42% tied, err med 18.8 km), which
+    // is where an observation type the model lacks would pay: SNR/RSSI (#60),
+    // silence (#59), terrain (#57). accuracy.mjs prints these on every run.
+    const COVERAGE_EDGE_SHARPNESS = 3;
 
     // Range is clamped to >= 2 km. anchorRangeKm()'s hopRadiusKm tier is
     // unfloored (the 2nd-hop input allows 1 km), and a plateau finer than the

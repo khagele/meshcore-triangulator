@@ -2513,37 +2513,122 @@
       return fetchAhnElevation(lat, lon);
     }
 
+    // First Fresnel zone geometry needs a wavelength. MeshCore's EU region is
+    // the 868 MHz band, so lambda = c / f = 0.345 m. Another band would scale
+    // the zone radius by the square root of the frequency ratio, a small
+    // effect next to the sampling coarseness documented below.
+    const LORA_WAVELENGTH_M = 0.345;
+    // 4/3 earth model, the standard allowance for atmospheric refraction:
+    // 4/3 * 6371 km. Past about 10 km the earth's bulge between two points is
+    // several metres, larger than the antenna heights themselves, so a profile
+    // drawn as a straight line over a flat earth reads every long path as
+    // clear when it is not.
+    const EFFECTIVE_EARTH_RADIUS_M = 8495000;
+    // Excess diffraction loss treated as "no usable path" when the loss is
+    // mapped back to a likelihood. A judgement call, not a measurement: 30 dB
+    // is roughly the margin a LoRa link has in hand between an easy reception
+    // and none at all. It sets how loudly terrain speaks, not which cell it
+    // prefers. For scale: the beam exactly grazing an obstruction (6.0 dB)
+    // lands at 0.80, a ridge 25 m into the beam at ~0.5, a 100 m hill at ~0.1.
+    const DIFFRACTION_BUDGET_DB = 30;
+
+    // Excess loss of a single knife edge, the ITU-R P.526 approximation to the
+    // Fresnel-Kirchhoff integral. `nu` is the diffraction parameter: negative
+    // means the beam passes above the obstruction. nu <= -0.7 is the textbook
+    // "60% of the first Fresnel zone is clear" case and costs nothing; nu = 0,
+    // the beam exactly grazing, costs the textbook 6 dB.
+    function knifeEdgeLossDb(nu) {
+      if (nu <= -0.7) {
+        return 0;
+      }
+      const offset = nu - 0.1;
+      return 6.9 + (20 * Math.log10(Math.sqrt((offset * offset) + 1) + offset));
+    }
+
+    // Line of sight factor in [0, 1], or NULL when AHN has nothing usable for
+    // this path. Null means UNKNOWN and callers must not turn it into a
+    // number: off the AHN footprint and over open water every sample comes
+    // back nodata, and the old code answered a flat 0.55 there, telling the
+    // estimator that a path it knows nothing about is definitely mediocre
+    // (#58). Since #52 gave terrain real authority, that lie moves the answer.
+    //
+    // What the number means, exactly: the worst knife-edge diffraction loss
+    // among the points we sampled. NOT the worst obstruction on the path.
+    // Sample spacing here is 0.8 to 2.5 km while the first Fresnel zone is
+    // tens of metres wide, so a tree line or a single hill between two samples
+    // is invisible to it. Closing that gap needs roughly 100 m spacing, about
+    // 20x the AHN requests, per anchor, per candidate cell, against a
+    // third-party WMS that rate-limits. So this stays a broad relief check.
+    // The Fresnel maths supplies the yardstick the sampled clearances are
+    // measured against, which is what lets one set of constants behave sanely
+    // at 3 km and at 25 km; it does not buy resolution the profile lacks.
     async function terrainLosFactor(from, to) {
       const distanceKm = haversineKm(from, to);
       if (distanceKm <= 0.15) {
         return 1;
       }
-      const samples = clamp(Math.ceil(distanceKm / 3), 3, 6);
-      const profilePoints = [];
-      for (let step = 0; step <= samples; step += 1) {
-        profilePoints.push(interpolatePoint(from, to, step / samples));
+      // Roughly twice the old spatial resolution for the same or fewer AHN
+      // requests. The old profile read DTM *and* DSM at every point, but the
+      // intermediate points only ever used max(DTM, DSM), and DSM is by
+      // definition the upper surface, so the paired DTM read bought nothing
+      // there. Dropping it pays for the finer sampling: an intermediate point
+      // now costs exactly one request instead of two, and
+      // clamp(ceil(d / 1.8), 5, 10) - 1 never exceeds 2 * (clamp(ceil(d / 3),
+      // 3, 6) - 1) at any path length (#58).
+      const samples = clamp(Math.ceil(distanceKm / 1.8), 5, 10);
+      // Both antenna feet have to be known or there is no beam to test.
+      // Checked before the profile is fetched, so a candidate cell off the
+      // footprint costs two lookups instead of a full profile.
+      const fromGround = await fetchAhnElevation(from.lat, from.lon);
+      if (!Number.isFinite(fromGround)) {
+        return null;
       }
-      const profiles = await Promise.all(profilePoints.map(async (point) => ({
-        ground: await fetchAhnElevation(point.lat, point.lon),
-        surface: await fetchAhnSurfaceElevation(point.lat, point.lon)
-      })));
-      if (profiles.some((value) => !Number.isFinite(value.ground))) {
-        return 0.55;
+      const targetGround = await fetchAhnElevation(to.lat, to.lon);
+      if (!Number.isFinite(targetGround)) {
+        return null;
       }
-      const startHeight = profiles[0].ground + REPEATER_ANTENNA_HEIGHT_M;
-      const targetGround = profiles[profiles.length - 1].ground;
-      const targetSurface = Number.isFinite(profiles[profiles.length - 1].surface) ? profiles[profiles.length - 1].surface : targetGround;
-      const localClutter = Math.max(0, targetSurface - targetGround);
+      const interior = [];
+      for (let step = 1; step < samples; step += 1) {
+        interior.push(interpolatePoint(from, to, step / samples));
+      }
+      const [targetSurface, obstructions] = await Promise.all([
+        fetchAhnSurfaceElevation(to.lat, to.lon),
+        Promise.all(interior.map((point) => fetchAhnLayerValue(point.lat, point.lon, "dsm_05m", surfaceCache)))
+      ]);
+      const startHeight = fromGround + REPEATER_ANTENNA_HEIGHT_M;
       const endHeight = targetGround + TARGET_ANTENNA_HEIGHT_M;
-      let worstClearance = 1;
-      for (let index = 1; index < profiles.length - 1; index += 1) {
-        const fraction = index / (profiles.length - 1);
-        const expectedBeamHeight = startHeight + ((endHeight - startHeight) * fraction);
-        const obstructionHeight = Math.max(profiles[index].ground, Number.isFinite(profiles[index].surface) ? profiles[index].surface : profiles[index].ground);
-        const clearance = expectedBeamHeight - obstructionHeight;
-        worstClearance = Math.min(worstClearance, clamp((clearance + 6) / 26, 0, 1));
+      const pathM = distanceKm * 1000;
+      let worstLossDb = 0;
+      let measured = 0;
+      for (let index = 0; index < obstructions.length; index += 1) {
+        const obstruction = obstructions[index];
+        // A nodata sample is a hole in the profile, not a clear one. Skip it
+        // and judge the path on the points that did answer.
+        if (!Number.isFinite(obstruction)) {
+          continue;
+        }
+        measured += 1;
+        const fraction = (index + 1) / samples;
+        const nearM = pathM * fraction;
+        const farM = pathM - nearM;
+        const earthBulgeM = (nearM * farM) / (2 * EFFECTIVE_EARTH_RADIUS_M);
+        const beamHeight = startHeight + ((endHeight - startHeight) * fraction);
+        const clearance = beamHeight - (obstruction + earthBulgeM);
+        const fresnelRadiusM = Math.sqrt((LORA_WAVELENGTH_M * nearM * farM) / pathM);
+        // Sign flip: the diffraction parameter counts obstruction height ABOVE
+        // the beam, clearance counts the beam above the obstruction.
+        const nu = -Math.SQRT2 * (clearance / fresnelRadiusM);
+        worstLossDb = Math.max(worstLossDb, knifeEdgeLossDb(nu));
       }
-      return worstClearance * clamp(1 - (localClutter / 18), 0.35, 1);
+      // Endpoints known but not one usable sample between them: still unknown.
+      if (!measured) {
+        return null;
+      }
+      const pathFactor = clamp(1 - (worstLossDb / DIFFRACTION_BUDGET_DB), 0, 1);
+      // Clutter around the target itself. Carried over untouched, including
+      // the unexplained 18 m and 0.35 floor, which are out of scope for #58.
+      const localClutter = Math.max(0, (Number.isFinite(targetSurface) ? targetSurface : targetGround) - targetGround);
+      return pathFactor * clamp(1 - (localClutter / 18), 0.35, 1);
     }
 
     // Likelihood that an obstructed path still produced the reception we saw.
@@ -2569,10 +2654,26 @@
     //     A step discontinuity in the objective: one anchor at 0.549 dropped it
     //     entirely, which could jump the argmax between adjacent cells for no
     //     physical reason. It has no likelihood interpretation to carry over.
+    //
+    // Anchors whose path terrain is unknown abstain: they contribute 0, so an
+    // unmeasurable path neither helps nor hurts a cell (#58). Known bias of
+    // that rule: every term here is <= 0, so a cell with NO terrain data at
+    // all scores 0, which is the best score on offer. Where the candidate grid
+    // straddles the AHN edge (coast, large water, the Belgian and German
+    // border) an unmeasurable cell can therefore outrank an inland cell whose
+    // paths are measurably obstructed. That is the honest consequence of
+    // refusing to invent a value for missing data, and the fix is terrain
+    // cover for those cells rather than a number made up for them (#72).
+    // Where NOTHING is measurable the term is 0 everywhere, so the terrain
+    // pass simply leaves the flat ranking alone, which is the intended
+    // behaviour.
     async function terrainAnchorScore(point) {
       const anchors = currentRfAnchors.length ? currentRfAnchors : currentMatchedNodes;
       const logFactors = await Promise.all(anchors.map(async (anchor) => {
         const los = await terrainLosFactor(anchor, point);
+        if (los === null) {
+          return 0;
+        }
         return (anchor.weight || 1) * Math.log(TERRAIN_LOS_FLOOR + ((1 - TERRAIN_LOS_FLOOR) * los));
       }));
       return logFactors.reduce((sum, value) => sum + value, 0);

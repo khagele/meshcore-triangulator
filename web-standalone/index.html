@@ -1098,7 +1098,7 @@
         </div>
         <div class="intro-sub">
           <p class="intro-sub-title">Duplicates</p>
-          <p>One prefix can match several real nodes. The one with proven links wins, else the one nearest the cluster; the rest are listed unchecked as <strong>duplicate prefix</strong> so you can swap the pick.</p>
+          <p>One prefix can match several real nodes. The one with proven links wins, else the one nearest the cluster. That fallback is a guess, not evidence, so it is called out in the cluster status line. The rest are listed unchecked as <strong>duplicate prefix</strong> so you can swap the pick.</p>
         </div>
         <div class="intro-sub">
           <p class="intro-sub-title">Missing a repeater</p>
@@ -1651,8 +1651,23 @@
     // mesh connection) over one without; among equally-evidenced (or equally
     // un-evidenced) candidates, keep the one nearest the cluster centre (the
     // spurious far duplicate is what blows up the zoom), tiebreak on the
-    // upstream-reported link_count. Returns the kept nodes plus the removed
-    // duplicates (for review in the editor).
+    // upstream-reported link_count.
+    //
+    // The nearest-the-centre step is circular (#54). The centroid is computed
+    // from these same node positions and sits close to the very thing we are
+    // estimating, so preferring the candidate nearest it pulls the observer
+    // set, and therefore the estimate, toward the centre: the heuristic
+    // confirms its own starting assumption. Worse, it only fires when proven
+    // links cannot decide, i.e. exactly when there is no evidence to catch a
+    // bad pick. It stays because a far spurious duplicate is the failure that
+    // visibly wrecks an estimate, but it is a guess and is never applied
+    // silently: centroidDecided counts the prefixes it decided, and the
+    // cluster status line reports them so the operator can override.
+    // Replacing it with a proper mixture over candidates is fix A in #54;
+    // manual resolution on the map is #33.
+    //
+    // Returns the kept nodes, the removed duplicates (for review in the
+    // editor), and centroidDecided.
     function dedupeByPrefix(nodes, centroid, provenNodeIds = new Set()) {
       const groups = new Map();
       nodes.forEach((node) => {
@@ -1662,21 +1677,32 @@
       });
       const kept = [];
       const removed = [];
+      let centroidDecided = 0;
+      const isProven = (node) => (provenNodeIds.has(nodeId(node)) ? 1 : 0);
+      const centroidKm = (node) => haversineKm(centroid, node);
       groups.forEach((group) => {
         if (group.length === 1) { kept.push(group[0]); return; }
         const sorted = group.slice().sort((a, b) => {
-          const aProven = provenNodeIds.has(nodeId(a)) ? 1 : 0;
-          const bProven = provenNodeIds.has(nodeId(b)) ? 1 : 0;
+          const aProven = isProven(a);
+          const bProven = isProven(b);
           if (aProven !== bProven) return bProven - aProven;
-          const da = haversineKm(centroid, a);
-          const db = haversineKm(centroid, b);
+          const da = centroidKm(a);
+          const db = centroidKm(b);
+          // Circular tie-break, see the note above. Counted, never hidden.
           if (Math.abs(da - db) > 0.001) return da - db;
           return (b.link_count || 0) - (a.link_count || 0);
         });
+        // The centroid decided this prefix whenever proven links did not
+        // separate the winner from the runner-up and the two sit at
+        // different distances (same test as the comparator above).
+        if (isProven(sorted[0]) === isProven(sorted[1])
+          && Math.abs(centroidKm(sorted[0]) - centroidKm(sorted[1])) > 0.001) {
+          centroidDecided++;
+        }
         kept.push(sorted[0]);
         removed.push(...sorted.slice(1));
       });
-      return { kept, removed };
+      return { kept, removed, centroidDecided };
     }
 
     // Interleave nodes round-robin by prefix (instead of raw API/response
@@ -3147,16 +3173,17 @@
       const { kept: hullShapedNodes, excluded: hullExcluded } = filterToHullShape(clusterNodes, getRegionRadiusKm(), provenLinks);
 
       // Assisted de-duplication: keep one node per prefix (proven-link
-      // evidence first, then nearest the cluster centre) so duplicates don't
-      // skew the estimate or the zoom. Removed duplicates stay in the
-      // observer pool, shown unchecked for review.
+      // evidence first, then nearest the cluster centre, which is a guess and
+      // is reported in the status line) so duplicates don't skew the estimate
+      // or the zoom. Removed duplicates stay in the observer pool, shown
+      // unchecked for review.
       const centroid = centroidOfNodes(hullShapedNodes);
       const provenNodeIds = new Set();
       provenLinks.forEach((link) => {
         provenNodeIds.add(nodeId(link.from));
         provenNodeIds.add(nodeId(link.to));
       });
-      const { kept: dedupedNodes, removed: dupRemoved } = dedupeByPrefix(hullShapedNodes, centroid, provenNodeIds);
+      const { kept: dedupedNodes, removed: dupRemoved, centroidDecided: dupCentroidDecided } = dedupeByPrefix(hullShapedNodes, centroid, provenNodeIds);
 
       // Record why pool nodes are unchecked by default, for the editor.
       observerExclusionReasons = new Map();
@@ -3188,8 +3215,14 @@
       const hullNote = hullExcluded.length
         ? ` ${hullExcluded.length} 2nd-hop node${hullExcluded.length === 1 ? "" : "s"} outside the 1st-hop hull excluded — review in the list below.`
         : "";
+      // Same rule as the caps and filters below: nothing is decided silently.
+      // The nearest-the-centre pick is a guess, not evidence (#54), so it is
+      // named whenever it actually decided a prefix.
+      const dupGuessNote = dupCentroidDecided
+        ? ` Proven links did not separate ${dupCentroidDecided} prefix${dupCentroidDecided === 1 ? "" : "es"}, so the node nearest the cluster centre was kept. That pick biases the estimate toward the centre.`
+        : "";
       const dedupNote = dupRemoved.length
-        ? ` Auto-removed ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"} (kept the one nearest the cluster centre) — review in the list below.`
+        ? ` Auto-removed ${dupRemoved.length} duplicate-prefix node${dupRemoved.length === 1 ? "" : "s"}, review in the list below.${dupGuessNote}`
         : "";
       // Never let a coverage cap look like "there was nothing more" (#38).
       const linkCapNote = linkFetchSkipped

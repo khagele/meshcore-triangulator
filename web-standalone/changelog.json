@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-18-terrain-line-of-sight",
+    "date": "2026-08-18",
+    "title": "Better line-of-sight checks, and honesty about the gaps",
+    "body": "The terrain check now works out how much a hill actually blocks a radio path, using the standard diffraction maths and allowing for the curve of the earth, instead of a rough clearance score with hand-picked numbers. It also samples about twice as many points along each path while making fewer requests for height data. Where the height data does not cover a path, over open water or across the border, the tool now says it does not know rather than quietly scoring that path as average."
+  },
+  {
     "id": "2026-08-18-duplicate-prefix-guess",
     "date": "2026-08-18",
     "title": "Estimates no longer look more precise than they are",

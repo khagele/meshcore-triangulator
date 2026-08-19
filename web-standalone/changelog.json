@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-coverage-falloff",
+    "date": "2026-08-19",
+    "title": "Sharper estimates from a softer idea of coverage",
+    "body": "Hearing a node told the tool the target was somewhere inside that node's coverage, but treated everywhere inside it as equally likely, so where several coverage areas overlapped there was little to choose between the points inside. Coverage now fades with distance instead of stopping at an edge, which means the overlap of several nodes points somewhere in particular. Against a set of nodes whose real positions are known, the typical miss drops from 2.9 km to 2.4 km, and the tool now beats a plain average of the listening nodes on 64 of 92 cases instead of 57."
+  },
+  {
     "id": "2026-08-19-terrain-partial-cover",
     "date": "2026-08-19",
     "title": "Places the height data cannot see no longer win by default",

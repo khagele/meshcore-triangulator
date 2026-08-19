@@ -108,6 +108,11 @@ const lonStep = Number(grab(/lon \+= (0\.\d+)/, "lon step").split("+= ")[1]);
 const latPad = Number(grab(/Math\.min\(\.\.\.lats\) - (0\.\d+)/, "lat pad").split("- ")[1]);
 const lonPad = Number(grab(/Math\.min\(\.\.\.lons\) - (0\.\d+)/, "lon pad").split("- ")[1]);
 
+// How much better is the winning cell than the rest of the search area? A
+// likelihood ratio under e^0.5 either way is not a distinction any operator
+// could act on, so cells inside that band count as tied with the argmax (#69).
+const TIED_NATS = 0.5;
+
 function estimate(observers) {
   const lats = observers.map((o) => o.lat);
   const lons = observers.map((o) => o.lon);
@@ -116,14 +121,31 @@ function estimate(observers) {
   const minLon = Math.min(...lons) - lonPad;
   const maxLon = Math.max(...lons) + lonPad;
   let best = null;
+  const cells = [];
   for (let lat = minLat; lat <= maxLat; lat += latStep) {
     for (let lon = minLon; lon <= maxLon; lon += lonStep) {
       const point = { lat, lon };
       const score = estimator.scorePoint(point, observers, []);
+      cells.push({ lat, lon, score });
       if (!best || score > best.score) best = { lat, lon, score };
     }
   }
-  return best;
+  // Flatness diagnostics. An argmax is only meaningful if the surface it is
+  // the max OF has structure; without these, a change can move the reported
+  // point without anyone noticing the point was never pinned down.
+  const worst = cells.reduce((low, cell) => Math.min(low, cell.score), Infinity);
+  const tied = cells.filter((cell) => cell.score > best.score - TIED_NATS);
+  const tiedRadiusKm = tied.reduce(
+    (far, cell) => Math.max(far, estimator.haversineKm(cell, best)), 0);
+  return {
+    ...best,
+    // Total log-likelihood range over the whole searched area, in nats.
+    scoreSpanNats: best.score - worst,
+    // Share of the searched area that is tied with the winner.
+    tiedShare: tied.length / cells.length,
+    // How far the tied region reaches from the winning cell.
+    tiedRadiusKm
+  };
 }
 
 // Weight is times-heard. The fixture has one reception per observer, so 1,
@@ -209,6 +231,9 @@ for (const testCase of fixture.cases) {
   results.push({
     targetId: testCase.targetId,
     errorKm,
+    scoreSpanNats: best.scoreSpanNats,
+    tiedShare: best.tiedShare,
+    tiedRadiusKm: best.tiedRadiusKm,
     centroidErrorKm: estimator.haversineKm(centroid, testCase.target),
     // Sitting on whichever observer claims the smallest coverage: the crudest
     // possible reading of "heard by the shortest-range node".
@@ -266,6 +291,26 @@ const secondScored = results.reduce((sum, r) => sum + r.secondHopScored, 0);
 const secondOffered = results.reduce((sum, r) => sum + r.secondHopOffered, 0);
 console.log(`  2nd-hop observers scored: ${secondScored} of ${secondOffered} offered ` +
   `(rest fell outside the rank-1 cluster)`);
+
+// Is the argmax pinning anything down? Reported alongside the error, because
+// an error distribution alone cannot tell a model that is right from one that
+// had nothing to say and guessed the middle (#69).
+console.log();
+function reportFlatness(label, rows) {
+  if (!rows.length) return console.log(`${label.padEnd(30)} no cases`);
+  const span = percentile(rows.map((r) => r.scoreSpanNats), 0.5);
+  const share = percentile(rows.map((r) => r.tiedShare), 0.5);
+  const radius = percentile(rows.map((r) => r.tiedRadiusKm), 0.5);
+  console.log(
+    `${label.padEnd(30)} n=${String(rows.length).padEnd(4)} ` +
+    `span=${span.toFixed(2)} nats  tied=${(share * 100).toFixed(0)}% of grid  ` +
+    `tied within ${radius.toFixed(1)} km`
+  );
+}
+console.log("likelihood surface, medians (span = best cell minus worst cell)");
+reportFlatness("  all cases", results);
+reportFlatness("  nearest observer < 5 km", results.filter((r) => r.nearestObserverKm < 5));
+reportFlatness("  nearest observer >= 5 km", results.filter((r) => r.nearestObserverKm >= 5));
 
 const args = argv;
 const baselineIndex = args.indexOf("--baseline");

@@ -29,6 +29,13 @@ Run it both ways to tell "this change did nothing" apart from "this change was
 never exercised". Before the 2nd-hop half of the fixture existed those two were
 indistinguishable, and a zero delta read as a green light.
 
+It also reports how FLAT the likelihood surface is: the log-likelihood range
+across the whole searched grid, the share of that grid tied with the winning
+cell, and how far the tied region reaches. Error alone cannot separate a model
+that is right from one that had nothing to say and guessed the middle. On the
+committed fixture the whole grid spans a median 0.34 nats and is 100% tied,
+so the argmax is arbitrary within ~6.9 km, which is what #69 measures.
+
 To judge a change, capture a baseline before it and compare after:
 
 ```
@@ -49,7 +56,10 @@ sed 's/COVERAGE_EDGE_SHARPNESS = 6/COVERAGE_EDGE_SHARPNESS = 3/' \
 node web-standalone/tools/accuracy.mjs --source /tmp/variant.html
 ```
 
-That is how the parameter sweeps in #69 were run.
+That is how the parameter sweeps in #69 were run. Note what those found: kernel
+shape, range scale and grid extent all leave the error where it is, because the
+surface is flat before any of them apply. Re-run the flatness numbers before
+spending time on a change that only reshapes the kernel.
 
 The scoring functions are extracted from `index.html` at runtime rather than
 reimplemented, so the harness cannot drift from what ships. If a rename breaks

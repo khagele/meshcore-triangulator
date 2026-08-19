@@ -8,6 +8,10 @@
 //   node web-standalone/tools/accuracy.mjs --baseline out.json   # write results
 //   node web-standalone/tools/accuracy.mjs --compare out.json    # diff vs a run
 //   node web-standalone/tools/accuracy.mjs --hop1-only           # drop 2nd hop
+//   node web-standalone/tools/accuracy.mjs --prefix 2            # resolve
+//     observers by 2-hex prefix, as the app does, not by full id (#78)
+//   node web-standalone/tools/accuracy.mjs --prefix 2 --pick-cluster oracle
+//     as above, but assume the operator locks the right region in step 2
 //
 // Cases carry 1st- AND 2nd-hop observers. 2nd-hop nodes are built the way
 // runCaseDiscovery()/applyHopRadii() build them (SECOND_HOP_WEIGHT_FACTOR on the
@@ -67,12 +71,67 @@ const extracted = [
   grab(/const MIN_OBSERVATION_LIKELIHOOD = [\de.-]+;/, "MIN_OBSERVATION_LIKELIHOOD"),
   grab(/const SUPPORT_NODE_SCORE_WEIGHT = \d+;/, "SUPPORT_NODE_SCORE_WEIGHT"),
   grab(/function scorePoint\(point, matchedNodes, supportNodes\) \{[\s\S]*?\n    \}/, "scorePoint"),
-  grab(/function connectedComponents\(nodesList, thresholdKm, wideThresholdKm = thresholdKm\) \{[\s\S]*?\n    \}/, "connectedComponents")
+  grab(/function connectedComponents\(nodesList, thresholdKm, wideThresholdKm = thresholdKm\) \{[\s\S]*?\n    \}/, "connectedComponents"),
+  // Only reached in --prefix mode, see below.
+  grab(/function obsPrefix\(node\) \{[\s\S]*?\n    \}/, "obsPrefix"),
+  grab(/function nodeId\(node\) \{[\s\S]*?\n    \}/, "nodeId"),
+  grab(/function centroidOfNodes\(nodesList\) \{[\s\S]*?\n    \}/, "centroidOfNodes"),
+  grab(/function dedupeByPrefix\(nodes, centroid, provenNodeIds = new Set\(\)\) \{[\s\S]*?\n    \}/, "dedupeByPrefix")
 ];
 
 const estimator = new Function(`${extracted.join("\n")}
   return { scorePoint, anchorRangeKm, haversineKm, provenRadiusFromLinks, connectedComponents,
-           SECOND_HOP_WEIGHT_FACTOR };`)();
+           SECOND_HOP_WEIGHT_FACTOR, dedupeByPrefix, centroidOfNodes, nodeId, obsPrefix };`)();
+
+// --prefix <n> feeds observers the way the APP gets them: by n-hex prefix out
+// of the whole node universe, not by full id (#78).
+//
+// Without it, observers arrive by their full 8-hex id, so dedupeByPrefix() is
+// never entered and no change to it can be measured. That is the gap #78 exists
+// to close, and it is why fix A from #54 (a mixture over candidates) could not
+// be judged.
+//
+// What the mode reconstructs: an operator types a 2-hex clue prefix and the app
+// resolves it against every node on the map. So a case's candidate pool is
+// every node in the fixture sharing a clue prefix with one of its true
+// observers, which is the true observers PLUS decoys that never heard the
+// target. Clustering then drops the geographically implausible ones, as the app
+// does, and dedupeByPrefix() keeps one node per surviving prefix.
+//
+// Hops keep their own prefix space, matching the two separate inputs in the UI:
+// a 1st-hop clue only pulls 1st-hop candidates.
+const prefixArg = argv.indexOf("--prefix");
+const PREFIX_HEX = prefixArg !== -1 && argv[prefixArg + 1] ? Number(argv[prefixArg + 1]) : 0;
+if (prefixArg !== -1 && !(PREFIX_HEX >= 1 && PREFIX_HEX <= 8)) {
+  throw new Error("--prefix takes 1 to 8 hex characters");
+}
+
+// Every distinct node the fixture knows about, per hop, keyed by full id. The
+// stand-in for "every node on the map" that a prefix resolves against.
+const universe = { 1: new Map(), 2: new Map() };
+for (const testCase of fixture.cases) {
+  for (const observer of testCase.observers) {
+    if (!universe[1].has(observer.id)) universe[1].set(observer.id, observer);
+  }
+  for (const observer of testCase.secondHopObservers || []) {
+    if (!universe[2].has(observer.id)) universe[2].set(observer.id, observer);
+  }
+}
+const shortOf = (id) => id.slice(0, PREFIX_HEX).toUpperCase();
+
+// The nodes a case is scored on, per hop. In prefix mode the true set is
+// widened to everything sharing a clue prefix, then narrowed again by
+// clustering and dedupe, which is the pipeline the app runs.
+function poolFor(trueObservers, hop) {
+  if (!PREFIX_HEX) return { observers: trueObservers, decoys: 0 };
+  const cluePrefixes = new Set(trueObservers.map((o) => shortOf(o.id)));
+  const trueIds = new Set(trueObservers.map((o) => o.id));
+  const observers = [];
+  for (const [id, node] of universe[hop]) {
+    if (cluePrefixes.has(shortOf(id))) observers.push(node);
+  }
+  return { observers, decoys: observers.filter((o) => !trueIds.has(o.id)).length };
+}
 
 // The app never estimates over a raw observer list. Discovery clusters the
 // resolved candidates first and the operator locks ONE region, so the estimator
@@ -95,8 +154,25 @@ const HOP2_KM = Number(grab(/id="hop2-radius-input"[^>]*value="(\d+)"/, "2nd-hop
 // weighted one: a 2nd-hop node counts 0.3, so a loose knot of 2nd-hop nodes does
 // not outrank the direct evidence. With 1st-hop only the two are identical.
 const clusterWeight = (nodes) => nodes.reduce((sum, node) => sum + node.weight, 0);
-function largestCluster(observers) {
+// The app does NOT commit to rank 1: step 2 lists the candidate regions and the
+// operator locks one. Scoring rank 1 automatically therefore charges the
+// estimator for cluster choices a human would not make, which matters once
+// --prefix pulls decoys in and rank 1 can be a cluster of them.
+// --pick-cluster oracle locks the component nearest the known target instead,
+// an upper bound standing in for an operator who chooses correctly. The gap
+// between the two is the cost of cluster CHOICE, worth keeping separate from
+// the cost of the dedupe step inside a chosen cluster.
+const pickArg = argv.indexOf("--pick-cluster");
+const PICK = pickArg !== -1 && argv[pickArg + 1] ? argv[pickArg + 1] : "rank1";
+if (!["rank1", "oracle"].includes(PICK)) throw new Error("--pick-cluster takes rank1 or oracle");
+
+function largestCluster(observers, target) {
   const components = estimator.connectedComponents(observers, CLUSTER_KM, HOP2_KM);
+  if (PICK === "oracle") {
+    const distance = (component) => estimator.haversineKm(
+      estimator.centroidOfNodes(component.nodes), target);
+    return components.slice().sort((a, b) => distance(a) - distance(b))[0].nodes;
+  }
   components.sort((a, b) =>
     clusterWeight(b.nodes) - clusterWeight(a.nodes) || a.maxPairKm - b.maxPairKm);
   return components[0].nodes;
@@ -157,7 +233,10 @@ function prepare(observers, hop) {
   return observers.map((o) => {
     const node = {
       lat: o.lat, lon: o.lon, hop, link_count: o.link_count,
-      weight: hop === 2 ? estimator.SECOND_HOP_WEIGHT_FACTOR : 1
+      weight: hop === 2 ? estimator.SECOND_HOP_WEIGHT_FACTOR : 1,
+      // What the shipped nodeId() and obsPrefix() read. Set in both modes so
+      // they differ only in which nodes arrive here, not in node shape.
+      key: o.id, shortId: PREFIX_HEX ? shortOf(o.id) : o.id
     };
     if (o.links && o.links.length) {
       const { radiusKm } = estimator.provenRadiusFromLinks(o.links);
@@ -198,10 +277,12 @@ const results = [];
 const skipped = [];
 for (const testCase of fixture.cases) {
   const secondHop = hop1Only ? [] : (testCase.secondHopObservers || []);
+  const hop1Pool = poolFor(testCase.observers, 1);
+  const hop2Pool = poolFor(secondHop, 2);
   const clustered = largestCluster([
-    ...prepare(testCase.observers, 1),
-    ...prepare(secondHop, 2)
-  ]);
+    ...prepare(hop1Pool.observers, 1),
+    ...prepare(hop2Pool.observers, 2)
+  ], testCase.target);
   // A case whose rank-1 cluster is a lone node has no geometry to solve. The
   // app would not offer an estimate either, so scoring it would flatter or
   // punish the estimator for something it never sees.
@@ -209,24 +290,47 @@ for (const testCase of fixture.cases) {
     skipped.push(testCase.targetId);
     continue;
   }
-  const best = estimate(clustered);
+  // The step the default mode never reaches. Same call the app makes, same
+  // order: cluster, then one node per prefix. provenNodeIds is empty because
+  // the fixture records each observer's link DISTANCES but not the peer at the
+  // other end, so the proven-link tier cannot fire here. That leaves every
+  // collision to the nearest-the-centroid tier, which is the circular step #54
+  // named and #78 exists to measure. Counted, not hidden.
+  const trueIds = new Set([...testCase.observers, ...secondHop]
+    .map((o) => o.id.toLowerCase()));
+  let deduped = clustered;
+  let centroidDecided = 0;
+  let trueObserversDropped = 0;
+  if (PREFIX_HEX) {
+    const result = estimator.dedupeByPrefix(
+      clustered, estimator.centroidOfNodes(clustered), new Set());
+    deduped = result.kept;
+    centroidDecided = result.centroidDecided;
+    trueObserversDropped = result.removed
+      .filter((n) => trueIds.has(String(n.key).toLowerCase())).length;
+  }
+  if (deduped.length < 2) {
+    skipped.push(testCase.targetId);
+    continue;
+  }
+  const best = estimate(deduped);
   const errorKm = estimator.haversineKm(best, testCase.target);
   // Geometry strata below stay a statement about the DIRECT evidence, so they
   // are measured over the 1st-hop members of the cluster. A 2nd-hop node 3 km
   // out does not pin the target the way a 1st-hop one does, and letting it into
   // "nearest observer < 5 km" would move cases between strata for no reason
   // connected to accuracy.
-  const direct = clustered.filter((o) => o.hop !== 2);
-  const clusterDistances = (direct.length ? direct : clustered)
+  const direct = deduped.filter((o) => o.hop !== 2);
+  const clusterDistances = (direct.length ? direct : deduped)
     .map((o) => estimator.haversineKm(o, testCase.target));
   // Naive baselines. If the estimator cannot beat the centroid of the observers
   // it is not earning its complexity, and any future change should be judged
   // against the same yardstick rather than only against its predecessor.
   const centroid = {
-    lat: clustered.reduce((sum, o) => sum + o.lat, 0) / clustered.length,
-    lon: clustered.reduce((sum, o) => sum + o.lon, 0) / clustered.length
+    lat: deduped.reduce((sum, o) => sum + o.lat, 0) / deduped.length,
+    lon: deduped.reduce((sum, o) => sum + o.lon, 0) / deduped.length
   };
-  const tightest = clustered.reduce((a, b) =>
+  const tightest = deduped.reduce((a, b) =>
     (estimator.anchorRangeKm(a) <= estimator.anchorRangeKm(b) ? a : b));
   results.push({
     targetId: testCase.targetId,
@@ -238,13 +342,18 @@ for (const testCase of fixture.cases) {
     // Sitting on whichever observer claims the smallest coverage: the crudest
     // possible reading of "heard by the shortest-range node".
     tightestObserverErrorKm: estimator.haversineKm(tightest, testCase.target),
-    observerCount: clustered.length,
+    observerCount: deduped.length,
     // In the fixture vs in the cluster actually scored. A case can carry 2nd-hop
     // observers and still score none of them, which is not the same thing as
     // having none: only the second number means the 2nd-hop paths ran.
     secondHopOffered: secondHop.length,
-    secondHopScored: clustered.filter((o) => o.hop === 2).length,
-    droppedByClustering: testCase.observers.length + secondHop.length - clustered.length,
+    secondHopScored: deduped.filter((o) => o.hop === 2).length,
+    droppedByClustering: hop1Pool.observers.length + hop2Pool.observers.length - clustered.length,
+    // Prefix-mode bookkeeping; 0 in the default mode.
+    decoysPulledIn: hop1Pool.decoys + hop2Pool.decoys,
+    droppedByDedupe: clustered.length - deduped.length,
+    centroidDecided,
+    trueObserversDropped,
     maxObserverKm: Math.max(...clusterDistances),
     // Distance from the target to its nearest observer. A useful floor: no
     // estimator can do better than the geometry allows.
@@ -261,9 +370,25 @@ console.log(`2nd-hop in fixture: ${offeredNodes} observers across ${offeredCases
   (hop1Only ? " (ignored, --hop1-only)" : ""));
 console.log(`grid: ${latStep} x ${lonStep} deg, pad ${latPad} / ${lonPad}; ` +
   `cluster ${CLUSTER_KM} km, 2nd-hop ${HOP2_KM} km`);
-console.log(`scored ${results.length}, skipped ${skipped.length} whose rank-1 cluster was a single node`);
+console.log(`observers by ${PREFIX_HEX ? `${PREFIX_HEX}-hex prefix` : "full id"}; cluster pick ${PICK}`);
+console.log(`scored ${results.length}, skipped ${skipped.length} whose ` +
+  `${PICK === "oracle" ? "target-nearest" : "rank-1"} cluster came out a single node`);
 const dropped = results.reduce((sum, r) => sum + r.droppedByClustering, 0);
-console.log(`observers dropped by clustering: ${dropped}\n`);
+console.log(`observers dropped by clustering: ${dropped}`);
+if (PREFIX_HEX) {
+  const sum = (key) => results.reduce((total, r) => total + r[key], 0);
+  const collided = results.filter((r) => r.droppedByDedupe > 0).length;
+  console.log(
+    `resolved out of ${universe[1].size} 1st-hop and ${universe[2].size} 2nd-hop known nodes: ` +
+    `${sum("decoysPulledIn")} decoys pulled in, ${sum("droppedByDedupe")} dropped by dedupe ` +
+    `across ${collided} of ${results.length} cases`
+  );
+  console.log(
+    `  of those, ${sum("centroidDecided")} prefixes decided by nearest-the-centroid, ` +
+    `${sum("trueObserversDropped")} nodes that really did hear the target discarded`
+  );
+}
+console.log();
 report("error km, all cases", errors);
 report("  baseline: observer centroid", results.map((r) => r.centroidErrorKm));
 report("  baseline: tightest observer", results.map((r) => r.tightestObserverErrorKm));

@@ -1128,6 +1128,52 @@
       inset: 0;
     }
 
+    /* Relief exaggeration control (#87). Dutch relief is metres, so at 1x the
+       terrain is invisible and the 3D view is pointless. The factor is on
+       screen permanently and deliberately: a 6x hill sitting next to a
+       likelihood surface invites exactly the over-weighting of terrain that
+       #72 was about. */
+    .terrain-control {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 5;
+      width: 216px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(7, 25, 35, 0.92);
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--shadow);
+    }
+
+    .terrain-control label {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .terrain-control label b {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .terrain-control input[type="range"] {
+      width: 100%;
+      accent-color: #9be564;
+      margin: 0;
+    }
+
+    .terrain-control-note {
+      margin: 7px 0 0;
+      font-size: 0.66rem;
+      line-height: 1.35;
+      color: var(--muted);
+    }
+
     @media (max-width: 860px) {
       .shell {
         grid-template-columns: 1fr;
@@ -1312,6 +1358,16 @@
         </div>
         <div id="map3d-overlay" hidden>
           <div id="map3d"></div>
+          <div id="terrain-control" class="terrain-control" hidden>
+            <label for="terrain-exaggeration">
+              <span>Relief exaggeration</span>
+              <b id="terrain-exaggeration-value">6.0x</b>
+            </label>
+            <input id="terrain-exaggeration" type="range" min="1" max="12" step="0.5" value="6">
+            <p id="terrain-control-note" class="terrain-control-note">
+              Terrain shown at 6.0x. Decoration only: Step 3 measures line of sight from AHN at 0.5 m, this relief is a ~30 m global model.
+            </p>
+          </div>
         </div>
       </section>
     </div>
@@ -1348,6 +1404,10 @@
     const observerEditor = document.getElementById("observer-editor");
     const applyClusterWeightsButton = document.getElementById("apply-cluster-weights-button");
     const manualModeButton = document.getElementById("manual-mode-button");
+    const terrainControl = document.getElementById("terrain-control");
+    const terrainExaggerationInput = document.getElementById("terrain-exaggeration");
+    const terrainExaggerationValue = document.getElementById("terrain-exaggeration-value");
+    const terrainControlNote = document.getElementById("terrain-control-note");
     const manualBanner = document.getElementById("manual-banner");
     const manualBannerText = document.getElementById("manual-banner-text");
     const manualResetButton = document.getElementById("manual-reset-button");
@@ -4228,8 +4288,85 @@
       };
     }
 
+    // ── Terrain (#87) ───────────────────────────────────────────────────────
+    //
+    // The 3D view was a 3D camera over a flat basemap: no DEM, no setTerrain,
+    // every layer draped on a ground plane. So the one view that could show WHY
+    // a path is blocked showed no relief, while Step 3 does real diffraction
+    // maths over AHN.
+    //
+    // Source is AWS Terrain Tiles, terrarium encoding, free and keyless, and
+    // loaded direct like the MapLibre and OpenFreeMap assets already are, so
+    // server.py needs no new upstream entry.
+    //
+    // This DEM is ~30 m and global. Step 3's line-of-sight uses AHN at 0.5 m
+    // over NL only. The two disagree, and this one is the decoration while the
+    // other is the calculation — said in the control rather than left for the
+    // picture to imply.
+    const TERRAIN_DEM_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+    const TERRAIN_DEFAULT_EXAGGERATION = 6;
+    let terrainExaggeration = TERRAIN_DEFAULT_EXAGGERATION;
+    let terrainAvailable = false;
+
+    function currentExaggeration() {
+      const parsed = Number.parseFloat(terrainExaggerationInput ? terrainExaggerationInput.value : "");
+      return Number.isFinite(parsed) && parsed >= 1 ? parsed : TERRAIN_DEFAULT_EXAGGERATION;
+    }
+
+    function syncTerrainControl() {
+      if (!terrainControl) return;
+      // Absent rather than present-and-dead when there is no terrain to scale.
+      terrainControl.hidden = !terrainAvailable;
+      if (!terrainAvailable) return;
+      const factor = currentExaggeration().toFixed(1);
+      terrainExaggerationValue.textContent = `${factor}x`;
+      terrainControlNote.textContent =
+        `Terrain shown at ${factor}x. Decoration only: Step 3 measures line of sight from AHN at 0.5 m, this relief is a ~30 m global model.`;
+    }
+
+    function applyTerrainExaggeration() {
+      terrainExaggeration = currentExaggeration();
+      syncTerrainControl();
+      if (!map3d || !terrainAvailable) return;
+      map3d.setTerrain({ source: "t3d-dem", exaggeration: terrainExaggeration });
+    }
+
+    // A DEM tile failure must leave a usable flat view, not a broken overlay,
+    // matching how a MapLibre load failure already backs out and explains
+    // itself rather than stranding the operator.
+    function disableTerrain(reason) {
+      terrainAvailable = false;
+      syncTerrainControl();
+      if (map3d) {
+        try { map3d.setTerrain(null); } catch (e) { /* already gone */ }
+      }
+      if (reason) terrainStatus.textContent = reason;
+    }
+
+    function addTerrain(m) {
+      m.addSource("t3d-dem", {
+        type: "raster-dem",
+        tiles: [TERRAIN_DEM_URL],
+        encoding: "terrarium",
+        tileSize: 256,
+        maxzoom: 13,
+        attribution: "Elevation: Terrain Tiles (Mapzen / AWS Open Data)"
+      });
+      // Hillshade under everything else so relief reads at low pitch too, where
+      // the vertical displacement alone shows almost nothing.
+      m.addLayer({
+        id: "t3d-hillshade",
+        type: "hillshade",
+        source: "t3d-dem",
+        paint: { "hillshade-exaggeration": 0.45, "hillshade-shadow-color": "#0a1b24" }
+      });
+      terrainAvailable = true;
+      applyTerrainExaggeration();
+    }
+
     function add3dLayers() {
       const m = map3d;
+      addTerrain(m);
       // Likelihood heat grid (same red→blue scale as the 2D map), on the ground.
       m.addSource("t3d-heat", { type: "geojson", data: heatFeatures3d() });
       m.addLayer({
@@ -4302,6 +4439,13 @@
         zoom: 13, pitch: 0, bearing: 0
       });
       map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+      // A DEM tile 404/timeout arrives as a source error, not a throw, so it
+      // has to be caught here or the view silently keeps a half-loaded relief.
+      map3d.on("error", (e) => {
+        if (e && e.sourceId === "t3d-dem" && terrainAvailable) {
+          disableTerrain("Elevation tiles unavailable — 3D view is flat.");
+        }
+      });
       map3d.on("load", () => {
         add3dLayers();
         const b = bounds3d();
@@ -4313,6 +4457,10 @@
     function close3DView() {
       if (map3dOverlay) map3dOverlay.hidden = true;
       if (map3d) { map3d.remove(); map3d = null; }
+      // The map instance is gone, so the terrain went with it. Leaving this
+      // true would show a slider controlling nothing on the next open.
+      terrainAvailable = false;
+      syncTerrainControl();
       sync3dToggle();
     }
 
@@ -4323,6 +4471,10 @@
       const open = !!(map3dOverlay && !map3dOverlay.hidden);
       open3dButton.setAttribute("aria-pressed", open ? "true" : "false");
       open3dButton.textContent = open ? "Exit 3D" : "3D View";
+    }
+
+    if (terrainExaggerationInput) {
+      terrainExaggerationInput.addEventListener("input", applyTerrainExaggeration);
     }
 
     if (open3dButton) {

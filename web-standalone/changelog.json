@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-3d-terrain",
+    "date": "2026-08-19",
+    "title": "The 3D view finally has hills in it",
+    "body": "The 3D view was a tilted camera over a flat map: no landscape at all, which is odd for the one view meant to show why a hill blocks a signal. It now shows real elevation, with a slider to exaggerate the height. Dutch relief is a matter of metres, so at true scale you would see nothing; the slider starts at six times real height and the factor is always written on screen so you know how much the hills have been stretched. The elevation shown is a rough worldwide model, coarser than the height data Step 3 uses for its actual line-of-sight sums, and the panel says so."
+  },
+  {
     "id": "2026-08-19-resolve-duplicates-on-map",
     "date": "2026-08-19",
     "title": "Pick between same-prefix repeaters on the map",

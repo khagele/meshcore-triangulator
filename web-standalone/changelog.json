@@ -3,97 +3,97 @@
     "id": "2026-08-19-3d-map-default",
     "date": "2026-08-19",
     "title": "The map is the 3D one now, lying flat",
-    "body": "The tool opens on the 3D map instead of the flat one. It starts looking straight down, over the whole country, so at first glance nothing has changed except that the landscape is really there under the map. It still leans into perspective by itself once an estimate is ready, and the button in the top left switches back to the old flat map whenever you want it."
+    "body": "The tool now opens on the 3D map, looking straight down. It tilts once an estimate is ready."
   },
   {
     "id": "2026-08-19-terrain-control-moved",
     "date": "2026-08-19",
     "title": "Relief slider moved off the map",
-    "body": "The relief exaggeration slider sat on top of the 3D map, covering the thing it was there to adjust. It now sits in the controls card at the top left, next to the button that opens the 3D view, and appears only while that view is open. The wording is shorter too, and the amount of exaggeration is still shown at all times so you always know how much the hills have been stretched."
+    "body": "The relief slider sat on top of the map it was adjusting. It now lives in the controls card."
   },
   {
     "id": "2026-08-19-tilt-to-the-horizon",
     "date": "2026-08-19",
     "title": "Tilt the 3D view all the way to the horizon",
-    "body": "The 3D view would only lean over so far, which was fine when there was nothing to look at but a flat map. Now that it has real hills you can tilt it right down to a near-horizon view, which is the angle that actually shows what a ridge blocks. The view still opens flat and leans in by itself once an estimate is ready. The Reset button on the cluster-resolving strip is gone: switching back to the other repeater is just clicking it on the map, so the button was a second way to do the same thing."
+    "body": "The 3D view now tilts to a near-horizon angle, which is what shows you a blocking ridge."
   },
   {
     "id": "2026-08-19-3d-terrain",
     "date": "2026-08-19",
     "title": "The 3D view finally has hills in it",
-    "body": "The 3D view was a tilted camera over a flat map: no landscape at all, which is odd for the one view meant to show why a hill blocks a signal. It now shows real elevation, with a slider to exaggerate the height. Dutch relief is a matter of metres, so at true scale you would see nothing; the slider starts at six times real height and the factor is always written on screen so you know how much the hills have been stretched. The elevation shown is a rough worldwide model, coarser than the height data Step 3 uses for its actual line-of-sight sums, and the panel says so."
+    "body": "The 3D view now shows real elevation, exaggerated six times so Dutch relief is visible, and says by how much."
   },
   {
     "id": "2026-08-19-resolve-duplicates-on-map",
     "date": "2026-08-19",
     "title": "Pick between same-prefix repeaters on the map",
-    "body": "Two real repeaters can share the same 2-character prefix, and the tool picks one of them for you. Which one is right is a question about where they sit, but until now you could only compare two near-identical lines of text. There is now a Resolve on map button once a cluster is locked: the candidates it did not pick appear as dashed circles, joined by a line to the one in use, and clicking one swaps it in. Any weight you set carries across the swap, and Reset puts the automatic choice back. Nothing changes until you press Apply."
+    "body": "Two repeaters can share a prefix. Resolve on map shows the one the tool did not pick; click to swap it in, then Apply."
   },
   {
     "id": "2026-08-19-coverage-falloff",
     "date": "2026-08-19",
     "title": "Sharper estimates from a softer idea of coverage",
-    "body": "Hearing a node told the tool the target was somewhere inside that node's coverage, but treated everywhere inside it as equally likely, so where several coverage areas overlapped there was little to choose between the points inside. Coverage now fades with distance instead of stopping at an edge, which means the overlap of several nodes points somewhere in particular. Against a set of nodes whose real positions are known, the typical miss drops from 2.9 km to 2.4 km, and the tool now beats a plain average of the listening nodes on 64 of 92 cases instead of 57."
+    "body": "Coverage now fades with distance instead of stopping at an edge. Typical miss drops from 2.9 km to 2.4 km."
   },
   {
     "id": "2026-08-19-terrain-partial-cover",
     "date": "2026-08-19",
     "title": "Places the height data cannot see no longer win by default",
-    "body": "The terrain check skips any path it has no height data for, over open water or across the border. Skipping was free, so a spot the data could not see at all came out ahead of a spot the data had looked at and found blocked by a hill. Along the coast, the IJsselmeer and the borders that pushed answers offshore. Where only some paths can be checked, what those paths show is now taken to apply to the rest as well, so a spot judged on one path is compared fairly with a spot judged on five. Inland, where every path can be checked, nothing changes."
+    "body": "Spots the height data cannot see no longer beat spots it checked and found blocked. Inland, nothing changes."
   },
   {
     "id": "2026-08-19-cluster-card-contrast",
     "date": "2026-08-19",
     "title": "Cluster cards are readable again",
-    "body": "The cluster cards in step 2 were being painted in the same green as the main action button, which left the line under each cluster name, the one carrying how many prefixes and hits it has, almost invisible against it. That was a styling mistake rather than a choice. The cards are now a quiet dark tile, the cluster you have picked is marked with a green edge, and every line on them is comfortably readable wherever the panel sits on the page."
+    "body": "The step 2 cluster cards were green-on-green and barely readable. They are now dark tiles with a green edge on the one you picked."
   },
   {
     "id": "2026-08-18-terrain-line-of-sight",
     "date": "2026-08-18",
     "title": "Better line-of-sight checks, and honesty about the gaps",
-    "body": "The terrain check now works out how much a hill actually blocks a radio path, using the standard diffraction maths and allowing for the curve of the earth, instead of a rough clearance score with hand-picked numbers. It also samples about twice as many points along each path while making fewer requests for height data. Where the height data does not cover a path, over open water or across the border, the tool now says it does not know rather than quietly scoring that path as average."
+    "body": "Line of sight now uses proper diffraction maths and the earth's curve, and says so when the height data does not reach."
   },
   {
     "id": "2026-08-18-duplicate-prefix-guess",
     "date": "2026-08-18",
     "title": "Says when a duplicate repeater was picked by guesswork",
-    "body": "Two real repeaters can share the same 2-character prefix, and the tool has to pick one of them. Where there is a proven link it goes on that. Where there is not, it keeps whichever sits closest to the middle of the cluster, which is a guess, and a guess that pulls the estimate toward that middle. The cluster line now says how many prefixes were settled that way, so you can check those in the list below and swap the pick yourself."
+    "body": "Where no proven link decides between two same-prefix repeaters, the tool guesses the nearest one and now says how often."
   },
   {
     "id": "2026-08-18-estimate-precision",
     "date": "2026-08-18",
     "title": "Estimates no longer look more precise than they are",
-    "body": "The estimated position was printed to five decimals, about a metre, while the search behind it works in squares of roughly 800 metres and testing against known positions puts the answer a median 2 km out. Coordinates are now shown to three decimals, and the tool says how far off it typically lands, so the result reads as an area to search rather than a doorstep."
+    "body": "Positions were printed to the metre but land a median 2 km out. Now three decimals, with the typical error beside them."
   },
   {
     "id": "2026-08-17-receive-direction-radius",
     "date": "2026-08-17",
     "title": "Coverage now based on what a repeater can hear",
-    "body": "A repeater's assumed coverage was built from every link it takes part in, including links only ever proven in the outbound direction. Those run much longer than links proven inbound, so coverage came out too generous. Where a repeater has enough inbound evidence the coverage is now based on that alone, and where it does not the tool says so rather than pretending. Antennas and receivers differ at each end of a link, so the two directions are not interchangeable."
+    "body": "Coverage counted outbound-only links, which run longer and made it too generous. It now prefers inbound evidence."
   },
   {
     "id": "2026-08-17-plausible-link-ranges",
     "date": "2026-08-17",
     "title": "Ignoring impossible repeater links",
-    "body": "Each repeater's assumed coverage is worked out from the links it is known to have. Some of those links were hundreds of kilometres long, which no single hop can be at these radio settings, and that stretched a few repeaters' assumed range past 150 km. A repeater that wide stops helping narrow anything down. Links too long to be one hop are now left out, and the tool tells you how many it ignored."
+    "body": "Links too long to be a single hop are now ignored, and the tool says how many."
   },
   {
     "id": "2026-08-17-likelihood-scoring",
     "date": "2026-08-17",
     "title": "Sharper estimates from overlapping observers",
-    "body": "Observers are now combined by asking where all of them agree, rather than letting the loudest one outvote the rest. Estimates land about 16% closer in testing, and the heat map now shows where the answer is uncertain instead of looking the same everywhere."
+    "body": "Observers are now combined by where they all agree, rather than letting the loudest outvote the geometry."
   },
   {
     "id": "2026-08-17-hull-outlines",
     "date": "2026-08-17",
     "title": "Range and confidence outlines drawn correctly",
-    "body": "The shaded outlines around proven-link ranges, clusters and the estimated area were collapsing to a line with no fill. They now show the real area they cover."
+    "body": "The shaded outlines around ranges, clusters and the estimate were collapsing to a line. Fixed."
   },
   {
     "id": "2026-08-17-mcradar-prefix-lookup",
     "date": "2026-08-17",
     "title": "Repeater lookups working again",
-    "body": "Searching by a 2-character prefix had stopped reaching MC Radar and was quietly falling back to a different dataset. It now uses the current API, and the app says so on the rare occasion it does have to fall back."
+    "body": "Prefix searches had stopped reaching MC Radar and were falling back to a thinner source. Fixed."
   },
   {
     "id": "2026-07-24-intro",

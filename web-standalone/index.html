@@ -600,8 +600,58 @@
       filter: none;
     }
 
+    /* Manual resolution mode (#33). This hook already existed in the sheet and
+       was never applied by anything, so it is reused rather than a second mode
+       concept being invented next to it. */
     .map-wrap.is-draw-mode {
       outline: 2px solid rgba(155, 229, 100, 0.4);
+    }
+
+    .manual-banner {
+      position: absolute;
+      top: 12px;
+      /* Clear of Leaflet's zoom control, which owns the top-left corner: at
+         left: 12px the banner sat on top of it and lost its own last words
+         behind the +/- buttons. */
+      left: 58px;
+      z-index: 620;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: min(420px, calc(100% - 70px));
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(7, 25, 35, 0.92);
+      border: 1px solid rgba(155, 229, 100, 0.5);
+      color: var(--text);
+      font-size: 0.76rem;
+      font-weight: 600;
+    }
+
+    .manual-banner::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #9be564;
+      flex: 0 0 auto;
+    }
+
+    .manual-banner button {
+      margin: 0;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .manual-banner button:hover {
+      background: rgba(255, 255, 255, 0.12);
     }
 
     .source-panel p,
@@ -1193,6 +1243,7 @@
         <div class="controls-card">
           <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
           <button id="open-3d-button" type="button" class="button-secondary" aria-pressed="false">3D View</button>
+          <button id="manual-mode-button" type="button" class="button-secondary" aria-pressed="false" hidden>Resolve on map</button>
           <button id="share-button" type="button" class="button-secondary">Share</button>
           <button id="intro-open-button" type="button" class="button-muted is-icon is-meta-first" aria-label="How this works" title="How this works">?</button>
           <div class="whats-new">
@@ -1253,8 +1304,12 @@
     </section>
 
     <div class="map-col">
-      <section class="map-wrap">
+      <section class="map-wrap" id="map-wrap">
         <div id="map" aria-label="Map showing repeater locations"></div>
+        <div id="manual-banner" class="manual-banner" role="status" hidden>
+          <span id="manual-banner-text">Resolve on map</span>
+          <button id="manual-reset-button" type="button">Reset</button>
+        </div>
         <div id="map3d-overlay" hidden>
           <div id="map3d"></div>
         </div>
@@ -1292,6 +1347,11 @@
     const addClusterPrefixesButton = document.getElementById("add-cluster-prefixes-button");
     const observerEditor = document.getElementById("observer-editor");
     const applyClusterWeightsButton = document.getElementById("apply-cluster-weights-button");
+    const manualModeButton = document.getElementById("manual-mode-button");
+    const manualBanner = document.getElementById("manual-banner");
+    const manualBannerText = document.getElementById("manual-banner-text");
+    const manualResetButton = document.getElementById("manual-reset-button");
+    const mapWrap = document.getElementById("map-wrap");
     const clusterEditorStatus = document.getElementById("cluster-editor-status");
     const changeClusterButton = document.getElementById("change-cluster-button");
     const regionRadiusInput = document.getElementById("region-radius-input");
@@ -1388,6 +1448,9 @@
     const heatLayer = L.layerGroup().addTo(map);
     const candidateLayer = L.layerGroup().addTo(map);
     const resolvedLayer = L.layerGroup().addTo(map);
+    // Duplicate-prefix candidates, drawn only while manual mode is on (#33).
+    // Its own layer so toggling the mode does not re-render the resolved case.
+    const manualLayer = L.layerGroup().addTo(map);
     const terrainLayer = L.layerGroup().addTo(map);
 
     function toRadians(value) {
@@ -1552,6 +1615,13 @@
         // parameter the deep-link reader requires (#10).
         shareButton.disabled = !hasClues;
         if (!hasClues) resetShareUi("Enter prefixes first to share a link.");
+      }
+      if (manualModeButton) {
+        // There is nothing to resolve until a cluster is locked, so the
+        // control is absent rather than present-and-disabled: a dead button in
+        // the controls card reads as broken (#33).
+        manualModeButton.hidden = !hasRegion;
+        if (!hasRegion && manualMode) setManualMode(false);
       }
     }
 
@@ -2301,6 +2371,206 @@
         `).addTo(resolvedLayer);
         bindNodeLabel(marker, node, { permanent: false });
       });
+    }
+
+    // ── Manual resolution mode (#33) ────────────────────────────────────────
+    //
+    // dedupeByPrefix() keeps one node per prefix and marks the rest "duplicate
+    // prefix", unchecked in the Step 2 editor. Which one is right is a SPATIAL
+    // judgement, and the editor only shows it as near-identical text rows. This
+    // mode draws the rejected candidates on the map next to the kept one so the
+    // geometry is visible, and lets a click switch which node represents the
+    // prefix.
+    //
+    // It writes through the editor's own checkboxes rather than mutating
+    // currentMatchedNodes directly. That keeps ONE apply path: the existing
+    // "Apply to estimate" button reads the DOM, and the per-prefix weight
+    // carryover in syncClusterEditorFromLockedRegion() keeps a weight the
+    // operator set when the pick changes. A second write path would have to
+    // reimplement both and would drift.
+    //
+    // What this mode can and cannot say: it shows prefix AMBIGUITY, never
+    // correctness. Which candidate is the real observer is not knowable from
+    // the data the app has, only from ground truth the app does not carry, so
+    // nothing here is labelled right or wrong (#85).
+    let manualMode = false;
+
+    // Which nodes count as active RIGHT NOW. Reads the editor's checkboxes when
+    // they exist, because a map click writes there and is not applied yet:
+    // sourcing this from currentMatchedNodes would draw the pre-switch picture
+    // next to a post-switch editor. Falls back to applied state before the
+    // editor has rendered.
+    function activeObserverIds() {
+      const boxes = observerEditor.querySelectorAll('.observer-row input[type="checkbox"]');
+      if (!boxes.length) return new Set(currentMatchedNodes.map((node) => nodeId(node)));
+      const ids = new Set();
+      boxes.forEach((box) => { if (box.checked) ids.add(box.dataset.nodeid); });
+      return ids;
+    }
+
+    function duplicateCandidateGroups() {
+      if (!currentResolvedContext) return [];
+      const pool = lockedObserverPool.length ? lockedObserverPool : (currentResolvedContext.matches || []);
+      const activeIds = activeObserverIds();
+      const byPrefix = new Map();
+      pool.forEach((node) => {
+        // Proven-link support nodes are range-only and never represent a
+        // prefix, so they are not candidates for this choice.
+        if (observerExclusionReasons.get(nodeId(node)) === "proven-link (range only)") return;
+        const prefix = obsPrefix(node);
+        if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+        byPrefix.get(prefix).push(node);
+      });
+      const groups = [];
+      byPrefix.forEach((nodes, prefix) => {
+        if (nodes.length < 2) return;
+        groups.push({
+          prefix,
+          nodes,
+          active: nodes.filter((node) => activeIds.has(nodeId(node)))
+        });
+      });
+      return groups;
+    }
+
+    // The counterpart of makeMatchedIcon(): same size and white casing so the
+    // two read as the same KIND of thing, dashed rather than filled so it reads
+    // as "not currently in use". The white ring is what makes it survive a
+    // light basemap; at 0.14 opacity it did not.
+    function makeDuplicateIcon() {
+      return L.divIcon({
+        className: "",
+        html: `
+          <div style="
+            width: 18px;
+            height: 18px;
+            border-radius: 999px;
+            background: rgba(7, 17, 24, 0.55);
+            border: 3px dashed #9be564;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92), 0 0 0 6px rgba(7, 17, 24, 0.22);
+          "></div>
+        `,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+        popupAnchor: [0, -11]
+      });
+    }
+
+    // Flip the editor's checkboxes so `node` represents `prefix` and the
+    // others in its group do not. Returns false when the DOM rows are not
+    // present, which is the case before a cluster is locked.
+    function selectDuplicateCandidate(group, node) {
+      const wantedId = nodeId(node);
+      const rowFor = (id) => observerEditor
+        .querySelector(`.observer-row input[type="checkbox"][data-nodeid="${CSS.escape(id)}"]`)
+        ?.closest(".observer-row");
+      // The weight currently in force for this prefix, read before anything is
+      // unticked. syncClusterEditorFromLockedRegion()'s carryover (#14) only
+      // runs on a re-render from applied state, so without this a switch made
+      // inside one editing session would silently reset a weight just typed.
+      const outgoing = group.nodes
+        .map((candidate) => rowFor(nodeId(candidate)))
+        .find((row) => row && row.querySelector('input[type="checkbox"]').checked);
+      const carriedWeight = outgoing ? outgoing.querySelector(".observer-weight").value : null;
+      let touched = false;
+      group.nodes.forEach((candidate) => {
+        const id = nodeId(candidate);
+        const checkbox = observerEditor.querySelector(`input[type="checkbox"][data-nodeid="${CSS.escape(id)}"]`);
+        if (!checkbox) return;
+        const shouldCheck = id === wantedId;
+        if (checkbox.checked !== shouldCheck) {
+          checkbox.checked = shouldCheck;
+          touched = true;
+        }
+      });
+      if (!touched) return false;
+      const incoming = rowFor(wantedId);
+      if (incoming && carriedWeight !== null) {
+        incoming.querySelector(".observer-weight").value = carriedWeight;
+      }
+      updateApplyButtonState();
+      clusterEditorStatus.textContent =
+        `${group.prefix} now represented by ${node.adv_name || node.name || "the selected node"}. Apply to re-estimate.`;
+      renderManualLayer();
+      return true;
+    }
+
+    function renderManualLayer() {
+      manualLayer.clearLayers();
+      if (!manualMode) {
+        // Hide the banner on the way out. Returning before updateManualBanner()
+        // left it on screen after the mode closed itself, which it does
+        // whenever the locked cluster goes away.
+        updateManualBanner([]);
+        return;
+      }
+      const groups = duplicateCandidateGroups();
+      const activeIds = activeObserverIds();
+      groups.forEach((group) => {
+        group.nodes.forEach((node) => {
+          if (activeIds.has(nodeId(node))) return;   // the kept one is already drawn
+          const kept = group.active[0];
+          const apartKm = kept ? haversineKm(kept, node) : null;
+          // Tie the alternative to the node it would replace. Candidates for one
+          // prefix can sit tens of km apart, and two unconnected dots do not say
+          // "these are the same clue" on their own.
+          if (kept) {
+            L.polyline([[kept.lat, kept.lon], [node.lat, node.lon]], {
+              color: "#9be564", weight: 2, opacity: 0.55, dashArray: "5 6"
+            }).addTo(manualLayer);
+          }
+          const marker = L.marker([node.lat, node.lon], { icon: makeDuplicateIcon() }).addTo(manualLayer);
+          marker.bindPopup(`
+            <div>
+              <p class="popup-title">${group.prefix} · other candidate</p>
+              <p class="popup-copy">
+                ${node.adv_name || node.name || "Unnamed node"}<br>
+                ${node.lat.toFixed(5)}, ${node.lon.toFixed(5)}<br>
+                ${group.nodes.length} nodes share this prefix${apartKm !== null ? `<br>${apartKm.toFixed(1)} km from the one in use` : ""}
+              </p>
+              <button type="button" class="link-remove-btn" data-usenode="${nodeId(node)}">Use this one for ${group.prefix}</button>
+            </div>
+          `);
+          marker.on("popupopen", (e) => {
+            const btn = e.popup.getElement().querySelector("[data-usenode]");
+            if (!btn) return;
+            btn.addEventListener("click", () => {
+              marker.closePopup();
+              selectDuplicateCandidate(group, node);
+            });
+          });
+        });
+      });
+      updateManualBanner(groups);
+    }
+
+    function updateManualBanner(groups = duplicateCandidateGroups()) {
+      if (!manualBanner) return;
+      manualBanner.hidden = !manualMode;
+      if (!manualMode) return;
+      const others = groups.reduce((sum, g) => sum + Math.max(0, g.nodes.length - 1), 0);
+      manualBannerText.textContent = groups.length
+        ? `${groups.length} ambiguous prefix${groups.length === 1 ? "" : "es"}, ${others} other candidate${others === 1 ? "" : "s"} shown. Click one to use it.`
+        : "No prefix in this cluster has more than one candidate.";
+    }
+
+    function setManualMode(on) {
+      manualMode = !!on;
+      if (mapWrap) mapWrap.classList.toggle("is-draw-mode", manualMode);
+      if (manualModeButton) {
+        manualModeButton.setAttribute("aria-pressed", manualMode ? "true" : "false");
+        manualModeButton.textContent = manualMode ? "Done resolving" : "Resolve on map";
+      }
+      renderManualLayer();
+    }
+
+    // Put every ambiguous prefix back to the node dedupeByPrefix() chose, by
+    // re-syncing the editor from applied state. Nothing here has been applied
+    // yet, so discarding is just a re-render.
+    function resetManualChoices() {
+      syncClusterEditorFromLockedRegion();
+      clusterEditorStatus.textContent = "Manual picks discarded. Showing the automatic choice again.";
+      renderManualLayer();
     }
 
     function clearCandidateMap() {
@@ -3255,6 +3525,7 @@
       syncClusterEditorFromLockedRegion();
       updateWorkflowSteps("done");
       syncControlStates();
+      renderManualLayer();
       return true;
     }
 
@@ -3264,6 +3535,7 @@
       clearCandidateList();
       clearCandidateMap();
       resolvedLayer.clearLayers();
+      manualLayer.clearLayers();
       heatLayer.clearLayers();
       terrainLayer.clearLayers();
       clearClueZone();
@@ -3612,6 +3884,7 @@
         renderCandidateList();
         clearClueZone();
         resolvedLayer.clearLayers();
+        manualLayer.clearLayers();
         heatLayer.clearLayers();
         terrainLayer.clearLayers();
         currentMatchedNodes = [];
@@ -3774,6 +4047,16 @@
     // Enable Apply only when the editor differs from the last applied state.
     observerEditor.addEventListener("input", updateApplyButtonState);
     observerEditor.addEventListener("change", updateApplyButtonState);
+    // A tick in the editor and a click on the map are the same decision, so the
+    // map redraws from the editor rather than keeping its own copy (#33).
+    observerEditor.addEventListener("change", () => renderManualLayer());
+
+    if (manualModeButton) {
+      manualModeButton.addEventListener("click", () => setManualMode(!manualMode));
+    }
+    if (manualResetButton) {
+      manualResetButton.addEventListener("click", resetManualChoices);
+    }
     changeClusterButton.addEventListener("click", () => {
       currentCandidateRegions = lastDiscoveredCandidateRegions.slice();
       selectedCandidateRegionId = null;
@@ -3785,6 +4068,7 @@
       currentProvenLinks = [];
       lockedObserverPool = [];
       resolvedLayer.clearLayers();
+      manualLayer.clearLayers();
       heatLayer.clearLayers();
       terrainLayer.clearLayers();
       clearClueZone();

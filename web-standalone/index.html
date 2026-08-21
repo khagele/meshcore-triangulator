@@ -637,23 +637,6 @@
       flex: 0 0 auto;
     }
 
-    .manual-banner button {
-      margin: 0;
-      border: 1px solid rgba(255, 255, 255, 0.22);
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text);
-      border-radius: 999px;
-      padding: 2px 10px;
-      font: inherit;
-      font-size: 0.72rem;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
-    .manual-banner button:hover {
-      background: rgba(255, 255, 255, 0.12);
-    }
-
     .source-panel p,
     .step-panel p,
     .utility-panel p {
@@ -1354,7 +1337,6 @@
         <div id="map" aria-label="Map showing repeater locations"></div>
         <div id="manual-banner" class="manual-banner" role="status" hidden>
           <span id="manual-banner-text">Resolve on map</span>
-          <button id="manual-reset-button" type="button">Reset</button>
         </div>
         <div id="map3d-overlay" hidden>
           <div id="map3d"></div>
@@ -1410,7 +1392,6 @@
     const terrainControlNote = document.getElementById("terrain-control-note");
     const manualBanner = document.getElementById("manual-banner");
     const manualBannerText = document.getElementById("manual-banner-text");
-    const manualResetButton = document.getElementById("manual-reset-button");
     const mapWrap = document.getElementById("map-wrap");
     const clusterEditorStatus = document.getElementById("cluster-editor-status");
     const changeClusterButton = document.getElementById("change-cluster-button");
@@ -2621,15 +2602,6 @@
         manualModeButton.setAttribute("aria-pressed", manualMode ? "true" : "false");
         manualModeButton.textContent = manualMode ? "Done resolving" : "Resolve on map";
       }
-      renderManualLayer();
-    }
-
-    // Put every ambiguous prefix back to the node dedupeByPrefix() chose, by
-    // re-syncing the editor from applied state. Nothing here has been applied
-    // yet, so discarding is just a re-render.
-    function resetManualChoices() {
-      syncClusterEditorFromLockedRegion();
-      clusterEditorStatus.textContent = "Manual picks discarded. Showing the automatic choice again.";
       renderManualLayer();
     }
 
@@ -4114,9 +4086,6 @@
     if (manualModeButton) {
       manualModeButton.addEventListener("click", () => setManualMode(!manualMode));
     }
-    if (manualResetButton) {
-      manualResetButton.addEventListener("click", resetManualChoices);
-    }
     changeClusterButton.addEventListener("click", () => {
       currentCandidateRegions = lastDiscoveredCandidateRegions.slice();
       selectedCandidateRegionId = null;
@@ -4436,7 +4405,11 @@
         container: "map3d",
         style: "https://tiles.openfreemap.org/styles/liberty",
         center: [center.lon, center.lat],
-        zoom: 13, pitch: 0, bearing: 0
+        zoom: 13, pitch: 0, bearing: 0,
+        // MapLibre caps pitch at 60 by default. 85 is the library ceiling and
+        // the angle worth having now that there is real terrain to look along:
+        // a near-horizon view is how you see what a ridge actually blocks.
+        maxPitch: 85
       });
       map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
       // A DEM tile 404/timeout arrives as a source error, not a throw, so it

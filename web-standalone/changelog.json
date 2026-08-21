@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-tilt-to-the-horizon",
+    "date": "2026-08-19",
+    "title": "Tilt the 3D view all the way to the horizon",
+    "body": "The 3D view would only lean over so far, which was fine when there was nothing to look at but a flat map. Now that it has real hills you can tilt it right down to a near-horizon view, which is the angle that actually shows what a ridge blocks. The view still opens flat and leans in by itself once an estimate is ready. The Reset button on the cluster-resolving strip is gone: switching back to the other repeater is just clicking it on the map, so the button was a second way to do the same thing."
+  },
+  {
     "id": "2026-08-19-3d-terrain",
     "date": "2026-08-19",
     "title": "The 3D view finally has hills in it",

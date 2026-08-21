@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-one-map",
+    "date": "2026-08-19",
+    "title": "One map instead of two",
+    "body": "The old flat map has been removed; everything now draws on the 3D map, which still opens looking straight down. One map engine to load, and no more features that only exist on one of them."
+  },
+  {
     "id": "2026-08-19-3d-map-default",
     "date": "2026-08-19",
     "title": "The map is the 3D one now, lying flat",

@@ -76,12 +76,15 @@ const extracted = [
   grab(/function obsPrefix\(node\) \{[\s\S]*?\n    \}/, "obsPrefix"),
   grab(/function nodeId\(node\) \{[\s\S]*?\n    \}/, "nodeId"),
   grab(/function centroidOfNodes\(nodesList\) \{[\s\S]*?\n    \}/, "centroidOfNodes"),
-  grab(/function dedupeByPrefix\(nodes, centroid, provenNodeIds = new Set\(\)\) \{[\s\S]*?\n    \}/, "dedupeByPrefix")
+  grab(/function dedupeByPrefix\(nodes, centroid, provenNodeIds = new Set\(\)\) \{[\s\S]*?\n    \}/, "dedupeByPrefix"),
+  grab(/function uniquePrefixCount\(nodesList\) \{[\s\S]*?\n    \}/, "uniquePrefixCount"),
+  grab(/function componentScore\(component, prefixWeights\) \{[\s\S]*?\n    \}/, "componentScore")
 ];
 
 const estimator = new Function(`${extracted.join("\n")}
   return { scorePoint, anchorRangeKm, haversineKm, provenRadiusFromLinks, connectedComponents,
-           SECOND_HOP_WEIGHT_FACTOR, dedupeByPrefix, centroidOfNodes, nodeId, obsPrefix };`)();
+           SECOND_HOP_WEIGHT_FACTOR, dedupeByPrefix, centroidOfNodes, nodeId, obsPrefix,
+           componentScore, uniquePrefixCount };`)();
 
 // --prefix <n> feeds observers the way the APP gets them: by n-hex prefix out
 // of the whole node universe, not by full id (#78).
@@ -153,7 +156,18 @@ const HOP2_KM = Number(grab(/id="hop2-radius-input"[^>]*value="(\d+)"/, "2nd-hop
 // Weight rather than raw count because componentScore()'s leading term is the
 // weighted one: a 2nd-hop node counts 0.3, so a loose knot of 2nd-hop nodes does
 // not outrank the direct evidence. With 1st-hop only the two are identical.
-const clusterWeight = (nodes) => nodes.reduce((sum, node) => sum + node.weight, 0);
+// Rank the way runCaseDiscovery() does, with the shipped componentScore, not
+// with a local approximation. This harness used to sort candidate regions by
+// total observer weight then tightness, which is NOT what the app shows: the
+// app sorts by componentScore and slices to the top 5. Measuring a ranking
+// change (#85) against a different ranking function measures nothing, and the
+// rank-1 error reported before this was not the rank-1 the operator sees.
+//
+// prefixWeights is empty because every node prepared here carries a finite
+// weight, and componentScore only consults the map when it does not.
+const EMPTY_PREFIX_WEIGHTS = new Map();
+const CANDIDATE_LIMIT = 5;
+
 // The app does NOT commit to rank 1: step 2 lists the candidate regions and the
 // operator locks one. Scoring rank 1 automatically therefore charges the
 // estimator for cluster choices a human would not make, which matters once
@@ -167,14 +181,21 @@ const PICK = pickArg !== -1 && argv[pickArg + 1] ? argv[pickArg + 1] : "rank1";
 if (!["rank1", "oracle"].includes(PICK)) throw new Error("--pick-cluster takes rank1 or oracle");
 
 function largestCluster(observers, target) {
-  const components = estimator.connectedComponents(observers, CLUSTER_KM, HOP2_KM);
+  const components = estimator.connectedComponents(observers, CLUSTER_KM, HOP2_KM)
+    .map((component) => ({
+      ...component,
+      score: estimator.componentScore(component, EMPTY_PREFIX_WEIGHTS)
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, CANDIDATE_LIMIT);
   if (PICK === "oracle") {
+    // Nearest of the regions the operator is actually OFFERED, so the oracle
+    // stays an upper bound on choosing well from that list rather than a
+    // fantasy that reaches regions the app never shows.
     const distance = (component) => estimator.haversineKm(
       estimator.centroidOfNodes(component.nodes), target);
     return components.slice().sort((a, b) => distance(a) - distance(b))[0].nodes;
   }
-  components.sort((a, b) =>
-    clusterWeight(b.nodes) - clusterWeight(a.nodes) || a.maxPairKm - b.maxPairKm);
   return components[0].nodes;
 }
 

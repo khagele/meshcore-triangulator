@@ -79,6 +79,14 @@ cases. Dedupe runs identically in both oracle columns, and the worst rank-1
 blow-ups collapse when only the cluster choice changes: 8938F8CF 155.9 -> 2.5
 km, 29334479 191.9 -> 1.1 km. Cluster choice, not the tie-break, which is #85.
 
+### What "rank 1" means here
+
+Candidate regions are ranked with the shipped `componentScore` and cut to the
+top 5, exactly as `runCaseDiscovery()` does. This harness used to sort them by
+total observer weight instead, so its rank-1 was not the region the operator
+sees and a ranking change could not be measured at all (#85). Absolute numbers
+from before that fix do not reproduce; orderings were unaffected.
+
 To judge a change, capture a baseline before it and compare after:
 
 ```

@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-3d-map-default",
+    "date": "2026-08-19",
+    "title": "The map is the 3D one now, lying flat",
+    "body": "The tool opens on the 3D map instead of the flat one. It starts looking straight down, over the whole country, so at first glance nothing has changed except that the landscape is really there under the map. It still leans into perspective by itself once an estimate is ready, and the button in the top left switches back to the old flat map whenever you want it."
+  },
+  {
     "id": "2026-08-19-terrain-control-moved",
     "date": "2026-08-19",
     "title": "Relief slider moved off the map",

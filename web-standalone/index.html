@@ -2543,6 +2543,7 @@
         // left it on screen after the mode closed itself, which it does
         // whenever the locked cluster goes away.
         updateManualBanner([]);
+        refresh3dData();
         return;
       }
       const groups = duplicateCandidateGroups();
@@ -2583,6 +2584,7 @@
         });
       });
       updateManualBanner(groups);
+      refresh3dData();
     }
 
     function updateManualBanner(groups = duplicateCandidateGroups()) {
@@ -2639,6 +2641,7 @@
           fillOpacity: 0.95
         }).bindPopup(`Region ${candidate.rank}<br>${centroid.lat.toFixed(3)}, ${centroid.lon.toFixed(3)}<br>${candidate.nodes.length} hits`).addTo(candidateLayer);
       });
+      refresh3dData();
     }
 
     function clearClueZone() {
@@ -4186,12 +4189,119 @@
     // Push the current estimate/observer data into an already-open 3D view so it
     // tracks the 2D map after every re-estimate (observer estimate or terrain
     // refine). Without this the 3D view keeps stale estimate points.
+    // ── 3D parity for the 2D-only layers (#91 stage 1) ──────────────────────
+    //
+    // candidateLayer, manualLayer and the estimate hull existed only on the
+    // Leaflet map, so the 3D view was missing the whole of Step 2. Porting them
+    // first is what makes it possible to default to the 3D map later without
+    // taking cluster choice and duplicate resolution away.
+    //
+    // Geometry is mixed inside a source and split apart by layer filters on
+    // ["geometry-type"], which is how MapLibre does what a Leaflet layer group
+    // did by just holding different objects.
+
+    // Ring for a polygon, closed as GeoJSON requires.
+    function ringFromNodes(nodes) {
+      const hull = convexHullLatLon(nodes);
+      if (hull.length < 3) return null;
+      const ring = hull.map((p) => [p.lon, p.lat]);
+      ring.push(ring[0]);
+      return ring;
+    }
+
+    function candidateFeatures3d() {
+      const features = [];
+      (currentCandidateRegions || []).forEach((candidate) => {
+        const selected = candidate.id === selectedCandidateRegionId ? 1 : 0;
+        const props = { selected, rank: candidate.rank };
+        const ring = ringFromNodes(candidate.nodes);
+        if (ring) {
+          features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: props });
+        } else if (candidate.nodes.length === 2) {
+          features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: candidate.nodes.map((n) => [n.lon, n.lat]) },
+            properties: props
+          });
+        }
+      });
+      return { type: "FeatureCollection", features };
+    }
+
+    function candidateCentroidFeatures3d() {
+      return {
+        type: "FeatureCollection",
+        features: (currentCandidateRegions || []).map((candidate) => {
+          const centroid = centroidOfNodes(candidate.nodes);
+          return {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [centroid.lon, centroid.lat] },
+            properties: {
+              selected: candidate.id === selectedCandidateRegionId ? 1 : 0,
+              label: `Region ${candidate.rank}`
+            }
+          };
+        })
+      };
+    }
+
+    // Duplicate-prefix alternatives and the line tying each to the node it
+    // would replace. Mirrors renderManualLayer(), and is empty when the mode is
+    // off, so the 3D view shows it exactly when the 2D map does.
+    function manualFeatures3d() {
+      const features = [];
+      if (manualMode) {
+        const activeIds = activeObserverIds();
+        duplicateCandidateGroups().forEach((group) => {
+          const kept = group.active[0];
+          group.nodes.forEach((node) => {
+            if (activeIds.has(nodeId(node))) return;
+            if (kept) {
+              features.push({
+                type: "Feature",
+                geometry: { type: "LineString", coordinates: [[kept.lon, kept.lat], [node.lon, node.lat]] },
+                properties: { prefix: group.prefix }
+              });
+            }
+            features.push({
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [node.lon, node.lat] },
+              properties: { prefix: group.prefix }
+            });
+          });
+        });
+      }
+      return { type: "FeatureCollection", features };
+    }
+
+    // The dashed outline around the top estimate spots, so they read as a
+    // region rather than isolated dots. The dots themselves are t3d-est.
+    function estimateHullFeature3d() {
+      const pts = (lastEstimatePoints || []).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+      const features = [];
+      const ring = pts.length >= 3 ? ringFromNodes(pts) : null;
+      if (ring) {
+        features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} });
+      } else if (pts.length === 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: pts.map((p) => [p.lon, p.lat]) },
+          properties: {}
+        });
+      }
+      return { type: "FeatureCollection", features };
+    }
+
     function refresh3dData() {
       if (!map3d || !map3dOverlay || map3dOverlay.hidden) return;
       const sources = {
         "t3d-heat": heatFeatures3d,
+        "t3d-esthull": estimateHullFeature3d,
         "t3d-ranges": rangePolygonFeatures3d,
+        "t3d-candidates": candidateFeatures3d,
+        "t3d-candidate-pts": candidateCentroidFeatures3d,
         "t3d-links": linkFeatures3d,
+        "t3d-manual": manualFeatures3d,
         "t3d-obs": () => fc3dPoints(currentMatchedNodes),
         "t3d-est": estFeatures3d
       };
@@ -4345,11 +4455,66 @@
           "fill-opacity": ["+", 0.14, ["*", ["get", "norm"], 0.34]]
         }
       });
+      // Estimate-region outline (was terrainLayer's dashed hull).
+      m.addSource("t3d-esthull", { type: "geojson", data: estimateHullFeature3d() });
+      m.addLayer({
+        id: "t3d-esthull-fill", type: "fill", source: "t3d-esthull",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": "#111111", "fill-opacity": 0.04 }
+      });
+      m.addLayer({
+        id: "t3d-esthull-line", type: "line", source: "t3d-esthull",
+        paint: { "line-color": "#111111", "line-width": 2, "line-opacity": 0.9, "line-dasharray": [4, 3] }
+      });
       m.addSource("t3d-ranges", { type: "geojson", data: rangePolygonFeatures3d() });
       m.addLayer({ id: "t3d-ranges-fill", type: "fill", source: "t3d-ranges", paint: { "fill-color": "#e6007e", "fill-opacity": 0.12 } });
       m.addLayer({ id: "t3d-ranges-line", type: "line", source: "t3d-ranges", paint: { "line-color": "#e6007e", "line-width": 2 } });
+      // Candidate regions (was candidateLayer). Selected reads green and
+      // heavier, exactly as the 2D hulls do.
+      m.addSource("t3d-candidates", { type: "geojson", data: candidateFeatures3d() });
+      m.addLayer({
+        id: "t3d-candidates-fill", type: "fill", source: "t3d-candidates",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: {
+          "fill-color": ["case", ["==", ["get", "selected"], 1], "#9be564", "#7dd3fc"],
+          "fill-opacity": ["case", ["==", ["get", "selected"], 1], 0.12, 0.07]
+        }
+      });
+      m.addLayer({
+        id: "t3d-candidates-line", type: "line", source: "t3d-candidates",
+        paint: {
+          "line-color": ["case", ["==", ["get", "selected"], 1], "#9be564", "#7dd3fc"],
+          "line-width": ["case", ["==", ["get", "selected"], 1], 3, 2],
+          "line-opacity": 0.9
+        }
+      });
+      m.addSource("t3d-candidate-pts", { type: "geojson", data: candidateCentroidFeatures3d() });
+      m.addLayer({
+        id: "t3d-candidate-pts-circle", type: "circle", source: "t3d-candidate-pts",
+        paint: {
+          "circle-radius": ["case", ["==", ["get", "selected"], 1], 9, 7],
+          "circle-color": ["case", ["==", ["get", "selected"], 1], "#9be564", "#7dd3fc"],
+          "circle-stroke-color": "#ffffff", "circle-stroke-width": 2, "circle-opacity": 0.95
+        }
+      });
       m.addSource("t3d-links", { type: "geojson", data: linkFeatures3d() });
       m.addLayer({ id: "t3d-links-line", type: "line", source: "t3d-links", paint: { "line-color": "#3fc1a0", "line-width": 2, "line-opacity": 0.85 } });
+      // Duplicate-prefix alternatives (was manualLayer). MapLibre cannot dash a
+      // circle's stroke, so the alternative reads as accent-ringed-on-dark
+      // rather than dashed; the connector line carries the dash instead.
+      m.addSource("t3d-manual", { type: "geojson", data: manualFeatures3d() });
+      m.addLayer({
+        id: "t3d-manual-line", type: "line", source: "t3d-manual",
+        paint: { "line-color": "#9be564", "line-width": 2, "line-opacity": 0.55, "line-dasharray": [2, 2.5] }
+      });
+      m.addLayer({
+        id: "t3d-manual-circle", type: "circle", source: "t3d-manual",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 7, "circle-color": "rgba(7, 17, 24, 0.55)",
+          "circle-stroke-color": "#9be564", "circle-stroke-width": 3
+        }
+      });
       m.addSource("t3d-obs", { type: "geojson", data: fc3dPoints(currentMatchedNodes) });
       m.addLayer({ id: "t3d-obs-circle", type: "circle", source: "t3d-obs", paint: { "circle-radius": 6, "circle-color": "#9be564", "circle-stroke-color": "#0a1b24", "circle-stroke-width": 2 } });
       m.addLayer({ id: "t3d-obs-label", type: "symbol", source: "t3d-obs", layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": 11, "text-offset": [0, 1.2], "text-anchor": "top", "text-allow-overlap": false }, paint: { "text-color": "#eaf6ff", "text-halo-color": "#0a1b24", "text-halo-width": 1.4 } });

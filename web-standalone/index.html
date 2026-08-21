@@ -2455,16 +2455,20 @@
     // n=92, and the argument holds:
     //
     //   k       med   p75   p90   vs centroid
-    //   6 (old) 2.9   6.8   12.4  57-32
-    //   4       2.6   5.9   12.2  61-27
-    //   3       2.4   5.8   12.2  64-23
-    //   2.5     2.5   5.7   12.0  64-24
-    //   2       2.5   5.8   12.1  64-25
+    //   6 (old) 2.7   6.3   11.5  54-30
+    //   4       2.5   5.7   10.9  59-24
+    //   3       2.3   5.7   10.9  62-20
+    //   2       2.4   5.3   11.1  62-22
     //
     // Everything in k = [2, 4] beats k = 6 on median, p75, p90 and head to
     // head. A broad plateau of improvement rather than one lucky point, which
-    // is what separates a real effect from a fit to 92 cases. k = 3 sits in
+    // is what separates a real effect from a fit to 88 cases. k = 3 sits in
     // the middle of it.
+    //
+    // Re-measured after the harness was taught to rank candidate regions with
+    // componentScore, the way the app does, rather than by observer weight
+    // (#85). That moved every absolute number and changed none of the ordering:
+    // k = 3 still wins, 46 cases better against k = 6 and 17 worse.
     //
     // Also swept and rejected: a power law 1/(1+(d/R)^b). Its best point,
     // b = 1.5, has the lowest median seen anywhere (2.1) but its neighbours

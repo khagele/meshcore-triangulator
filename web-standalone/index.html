@@ -856,6 +856,48 @@
       border-radius: 14px;
     }
 
+    /* MapLibre popups (#91 stage 2). Leaflet's own CSS gives its popup wrapper
+       a dark text colour, so .popup-title / .popup-copy never needed one.
+       MapLibre's popup sets a white background and NO colour, so the same
+       markup inherited body's near-white --text and rendered white on white.
+       Styling these to match the app's panels fixes it and keeps one look
+       across both maps. */
+    .maplibregl-popup-content {
+      background: rgba(7, 25, 35, 0.96);
+      color: var(--text);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      font: inherit;
+      font-size: 0.82rem;
+    }
+
+    /* The tip is a CSS triangle drawn with border colours, and which side is
+       used depends on the popup's anchor. Setting all four means it matches
+       whichever way MapLibre decides to point it. */
+    .maplibregl-popup-tip {
+      border-top-color: rgba(7, 25, 35, 0.96);
+      border-bottom-color: rgba(7, 25, 35, 0.96);
+      border-left-color: rgba(7, 25, 35, 0.96);
+      border-right-color: rgba(7, 25, 35, 0.96);
+    }
+
+    .maplibregl-popup-close-button {
+      background: transparent;
+      border: 0;
+      color: var(--muted);
+      font-size: 1.1rem;
+      line-height: 1;
+      padding: 2px 7px;
+      cursor: pointer;
+    }
+
+    .maplibregl-popup-close-button:hover {
+      background: transparent;
+      color: var(--text);
+    }
+
     .popup-title {
       margin: 0 0 6px;
       font-size: 1rem;
@@ -4166,7 +4208,14 @@
           .map((n) => ({
             type: "Feature",
             geometry: { type: "Point", coordinates: [n.lon, n.lat] },
-            properties: { name: `${n.shortId || ""} ${n.adv_name || n.name || ""}`.trim() }
+            properties: {
+              name: `${n.shortId || ""} ${n.adv_name || n.name || ""}`.trim(),
+              title: n.adv_name || n.name || "Resolved node",
+              shortId: n.shortId || "",
+              lat: n.lat, lon: n.lon,
+              weight: Number.isFinite(n.weight) ? n.weight : 1,
+              provenRadiusKm: Number.isFinite(n.provenRadiusKm) ? n.provenRadiusKm : null
+            }
           }))
       };
     }
@@ -4181,7 +4230,7 @@
         features: pts.map((p, i) => ({
           type: "Feature",
           geometry: { type: "Point", coordinates: [p.lon, p.lat] },
-          properties: { best: i === 0 ? 1 : 0 }
+          properties: { best: i === 0 ? 1 : 0, rank: i + 1, lat: p.lat, lon: p.lon }
         }))
       };
     }
@@ -4213,7 +4262,12 @@
       const features = [];
       (currentCandidateRegions || []).forEach((candidate) => {
         const selected = candidate.id === selectedCandidateRegionId ? 1 : 0;
-        const props = { selected, rank: candidate.rank };
+        const props = {
+          selected,
+          rank: candidate.rank,
+          prefixes: uniquePrefixCount(candidate.nodes),
+          hits: candidate.nodes.length
+        };
         const ring = ringFromNodes(candidate.nodes);
         if (ring) {
           features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: props });
@@ -4238,7 +4292,10 @@
             geometry: { type: "Point", coordinates: [centroid.lon, centroid.lat] },
             properties: {
               selected: candidate.id === selectedCandidateRegionId ? 1 : 0,
-              label: `Region ${candidate.rank}`
+              rank: candidate.rank,
+              prefixes: uniquePrefixCount(candidate.nodes),
+              hits: candidate.nodes.length,
+              lat: centroid.lat, lon: centroid.lon
             }
           };
         })
@@ -4266,7 +4323,14 @@
             features.push({
               type: "Feature",
               geometry: { type: "Point", coordinates: [node.lon, node.lat] },
-              properties: { prefix: group.prefix }
+              properties: {
+                prefix: group.prefix,
+                nodeKey: nodeId(node),
+                title: node.adv_name || node.name || "Unnamed node",
+                lat: node.lat, lon: node.lon,
+                shareCount: group.nodes.length,
+                apartKm: kept ? haversineKm(kept, node) : null
+              }
             });
           });
         });
@@ -4342,7 +4406,16 @@
           .map((l) => ({
             type: "Feature",
             geometry: { type: "LineString", coordinates: [[l.from.lon, l.from.lat], [l.to.lon, l.to.lat]] },
-            properties: {}
+            properties: {
+              linkId: provenLinkId(l),
+              fromId: l.from.shortId || "",
+              toId: l.to.shortId || "",
+              direction: l.direction || "",
+              confidence: l.confidence ?? null,
+              confidenceTo: l.confidenceTo ?? null,
+              confidenceFrom: l.confidenceFrom ?? null,
+              distanceKm: Number.isFinite(l.distanceKm) ? l.distanceKm : null
+            }
           }))
       };
     }
@@ -4526,6 +4599,124 @@
       } });
     }
 
+    // ── 3D popups and interaction (#91 stage 2) ─────────────────────────────
+    //
+    // Leaflet binds a popup per object. MapLibre has no objects, only layers
+    // over data, so this is one click handler per layer reading the clicked
+    // feature's properties. Everything a popup says therefore has to travel in
+    // those properties, which is why the feature builders above carry more than
+    // geometry.
+    //
+    // The two popups with buttons (remove a proven link, use this candidate)
+    // reach back into the same functions the 2D map calls, so a decision made
+    // in either view goes through one code path.
+    let popup3d = null;
+
+    function show3dPopup(lngLat, html) {
+      if (popup3d) popup3d.remove();
+      popup3d = new maplibregl.Popup({ closeButton: true, maxWidth: "260px" })
+        .setLngLat(lngLat)
+        .setHTML(html)
+        .addTo(map3d);
+      return popup3d;
+    }
+
+    function linkPopupHtml(p) {
+      const dirLabel = p.direction === "both"
+        ? `${p.fromId} ⇄ ${p.toId} (both ways)`
+        : p.direction === "from"
+          ? `${p.toId} → ${p.fromId} (one way)`
+          : p.direction === "to"
+            ? `${p.fromId} → ${p.toId} (one way)`
+            : `${p.fromId} → ${p.toId}`;
+      const conf = (p.confidenceTo !== null || p.confidenceFrom !== null)
+        ? `Confidence: ${p.confidenceTo !== null ? `→ ${p.confidenceTo}` : ""}${p.confidenceTo !== null && p.confidenceFrom !== null ? " · " : ""}${p.confidenceFrom !== null ? `← ${p.confidenceFrom}` : ""}`
+        : `Confidence: ${p.confidence}`;
+      const dist = Number.isFinite(p.distanceKm) ? `<br>Distance: ${Number(p.distanceKm).toFixed(2)} km` : "";
+      return `
+        <div>
+          <p class="popup-title">Proven link</p>
+          <p class="popup-copy">${dirLabel}<br>${conf}${dist}</p>
+          <button type="button" class="link-remove-btn" data-linkid="${p.linkId}">Remove this link</button>
+        </div>
+      `;
+    }
+
+    function add3dInteractions(m) {
+      const clickable = [
+        "t3d-links-line", "t3d-obs-circle", "t3d-candidates-fill",
+        "t3d-candidate-pts-circle", "t3d-manual-circle", "t3d-est-circle"
+      ];
+      clickable.forEach((id) => {
+        m.on("mouseenter", id, () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", id, () => { m.getCanvas().style.cursor = ""; });
+      });
+
+      m.on("click", "t3d-links-line", (e) => {
+        const p = e.features[0].properties;
+        const popup = show3dPopup(e.lngLat, linkPopupHtml(p));
+        const btn = popup.getElement().querySelector(".link-remove-btn");
+        if (btn) btn.addEventListener("click", () => { popup.remove(); removeProvenLink(p.linkId); });
+      });
+
+      m.on("click", "t3d-obs-circle", (e) => {
+        const p = e.features[0].properties;
+        const radius = p.provenRadiusKm === null || p.provenRadiusKm === "null"
+          ? "" : `<br>Proven-link radius: ${Number(p.provenRadiusKm).toFixed(1)} km`;
+        show3dPopup(e.lngLat, `
+          <div>
+            <p class="popup-title">${p.title}</p>
+            <p class="popup-copy">Short ID: ${p.shortId}<br>Lat/Lon: ${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}<br>Weight: ${String(Number(p.weight).toFixed(2)).replace(/\.00$/, "")}${radius}</p>
+          </div>
+        `);
+      });
+
+      const regionPopup = (e) => {
+        const p = e.features[0].properties;
+        show3dPopup(e.lngLat, `
+          <div>
+            <p class="popup-title">Region ${p.rank}</p>
+            <p class="popup-copy">${p.prefixes} clue prefixes<br>${p.hits} hits</p>
+          </div>
+        `);
+      };
+      m.on("click", "t3d-candidates-fill", regionPopup);
+      m.on("click", "t3d-candidate-pts-circle", regionPopup);
+
+      m.on("click", "t3d-manual-circle", (e) => {
+        const p = e.features[0].properties;
+        const apart = p.apartKm === null || p.apartKm === "null"
+          ? "" : `<br>${Number(p.apartKm).toFixed(1)} km from the one in use`;
+        const popup = show3dPopup(e.lngLat, `
+          <div>
+            <p class="popup-title">${p.prefix} · other candidate</p>
+            <p class="popup-copy">${p.title}<br>${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}<br>${p.shareCount} nodes share this prefix${apart}</p>
+            <button type="button" class="link-remove-btn" data-usenode="${p.nodeKey}">Use this one for ${p.prefix}</button>
+          </div>
+        `);
+        const btn = popup.getElement().querySelector("[data-usenode]");
+        if (!btn) return;
+        btn.addEventListener("click", () => {
+          popup.remove();
+          // Same call the 2D map makes, so the swap goes through the editor and
+          // the one apply path rather than a second copy of the logic.
+          const group = duplicateCandidateGroups().find((g) => g.prefix === p.prefix);
+          const node = group && group.nodes.find((n) => nodeId(n) === p.nodeKey);
+          if (group && node) selectDuplicateCandidate(group, node);
+        });
+      });
+
+      m.on("click", "t3d-est-circle", (e) => {
+        const p = e.features[0].properties;
+        show3dPopup(e.lngLat, `
+          <div>
+            <p class="popup-title">${p.best === 1 || p.best === "1" ? "Best estimate" : `Estimate spot ${p.rank}`}</p>
+            <p class="popup-copy">${formatEstimateLatLon({ lat: Number(p.lat), lon: Number(p.lon) })}<br>typical error ${ESTIMATE_TYPICAL_ERROR_KM} km</p>
+          </div>
+        `);
+      });
+    }
+
     function bounds3d() {
       const b = new maplibregl.LngLatBounds();
       let any = false;
@@ -4586,6 +4777,7 @@
       });
       map3d.on("load", () => {
         add3dLayers();
+        add3dInteractions(map3d);
         const b = bounds3d();
         if (b) map3d.fitBounds(b, { padding: 90, pitch: 0, bearing: 0, maxZoom: 16, duration: 0 });
         if (perspective) go3dPerspective();

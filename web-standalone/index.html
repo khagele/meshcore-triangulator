@@ -1111,22 +1111,23 @@
       inset: 0;
     }
 
-    /* Relief exaggeration control (#87). Dutch relief is metres, so at 1x the
-       terrain is invisible and the 3D view is pointless. The factor is on
-       screen permanently and deliberately: a 6x hill sitting next to a
-       likelihood surface invites exactly the over-weighting of terrain that
-       #72 was about. */
+    /* Relief exaggeration (#87). Dutch relief is metres, so at 1x the terrain
+       is invisible and the 3D view is pointless. The factor stays on screen
+       whenever there is terrain to scale, deliberately: a 6x hill sitting next
+       to a likelihood surface invites exactly the over-weighting of terrain
+       that #72 was about.
+       It lives in the controls card next to the 3D toggle rather than floating
+       over the map. It is a setting for that view, so it belongs with the
+       control that opens it, and the map is for the map. */
     .terrain-control {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 5;
-      width: 216px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      background: rgba(7, 25, 35, 0.92);
-      border: 1px solid var(--panel-border);
-      box-shadow: var(--shadow);
+      /* The controls card is flex-wrap; this is how its other full-width rows
+         claim a line of their own (see .share-status). */
+      flex: 1 0 100%;
+      margin-top: 2px;
+      padding: 9px 11px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
     }
 
     .terrain-control label {
@@ -1285,6 +1286,16 @@
           </div>
           <!-- Full-width rows last: they wrap below the button row rather
                than pushing the right-aligned bell onto a second line. -->
+          <div id="terrain-control" class="terrain-control" hidden>
+            <label for="terrain-exaggeration">
+              <span>Relief exaggeration</span>
+              <b id="terrain-exaggeration-value">6.0x</b>
+            </label>
+            <input id="terrain-exaggeration" type="range" min="1" max="12" step="0.5" value="6">
+            <p class="terrain-control-note">
+              A ~30 m global model, for looking at. Step 3 measures line of sight from AHN at 0.5 m.
+            </p>
+          </div>
           <p id="share-status" class="share-status" role="status" hidden></p>
           <label id="share-fallback" class="share-fallback" hidden>
             Copy this link:
@@ -1340,16 +1351,6 @@
         </div>
         <div id="map3d-overlay" hidden>
           <div id="map3d"></div>
-          <div id="terrain-control" class="terrain-control" hidden>
-            <label for="terrain-exaggeration">
-              <span>Relief exaggeration</span>
-              <b id="terrain-exaggeration-value">6.0x</b>
-            </label>
-            <input id="terrain-exaggeration" type="range" min="1" max="12" step="0.5" value="6">
-            <p id="terrain-control-note" class="terrain-control-note">
-              Terrain shown at 6.0x. Decoration only: Step 3 measures line of sight from AHN at 0.5 m, this relief is a ~30 m global model.
-            </p>
-          </div>
         </div>
       </section>
     </div>
@@ -1389,7 +1390,6 @@
     const terrainControl = document.getElementById("terrain-control");
     const terrainExaggerationInput = document.getElementById("terrain-exaggeration");
     const terrainExaggerationValue = document.getElementById("terrain-exaggeration-value");
-    const terrainControlNote = document.getElementById("terrain-control-note");
     const manualBanner = document.getElementById("manual-banner");
     const manualBannerText = document.getElementById("manual-banner-text");
     const mapWrap = document.getElementById("map-wrap");
@@ -4287,10 +4287,10 @@
       // Absent rather than present-and-dead when there is no terrain to scale.
       terrainControl.hidden = !terrainAvailable;
       if (!terrainAvailable) return;
-      const factor = currentExaggeration().toFixed(1);
-      terrainExaggerationValue.textContent = `${factor}x`;
-      terrainControlNote.textContent =
-        `Terrain shown at ${factor}x. Decoration only: Step 3 measures line of sight from AHN at 0.5 m, this relief is a ~30 m global model.`;
+      // The factor lives in the label only. It used to be restated in the note
+      // as well, which meant a three-line caveat rewriting itself on every drag
+      // of the slider for no gain.
+      terrainExaggerationValue.textContent = `${currentExaggeration().toFixed(1)}x`;
     }
 
     function applyTerrainExaggeration() {

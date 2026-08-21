@@ -2701,6 +2701,7 @@
     function updateClueZone(nodesList) {
       clearClueZone();
       if (nodesList.length === 0) {
+        refresh3dData();
         return;
       }
       const hull = convexHullLatLon(nodesList);
@@ -2729,6 +2730,7 @@
         fillColor: "#f8e45c",
         fillOpacity: 0.95
       }).bindPopup(`Estimated clue centroid<br>${formatEstimateLatLon(center)}`).addTo(map);
+      refresh3dData();
     }
 
     function colorForScore(score) {
@@ -4357,10 +4359,53 @@
       return { type: "FeatureCollection", features };
     }
 
+    // Support nodes: proven-link peers that set an observer's range but do not
+    // anchor the estimate. They were on the Leaflet map only, so the 3D view
+    // was quietly missing them (#91 stage 4 prep).
+    function supportFeatures3d() {
+      return fc3dPoints(currentSupportNodes || []);
+    }
+
+    // The clue zone: hull of the resolved observers plus its centroid, the
+    // yellow region on the 2D map. Also Leaflet-only until now.
+    function clueZoneFeatures3d() {
+      const nodes = (currentMatchedNodes || []).filter((n) => Number.isFinite(n.lat) && Number.isFinite(n.lon));
+      const features = [];
+      if (!nodes.length) return { type: "FeatureCollection", features };
+      const ring = ringFromNodes(nodes);
+      if (ring) {
+        features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} });
+      } else if (nodes.length === 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: nodes.map((n) => [n.lon, n.lat]) },
+          properties: {}
+        });
+      }
+      return { type: "FeatureCollection", features };
+    }
+
+    function clueCentreFeature3d() {
+      const nodes = (currentMatchedNodes || []).filter((n) => Number.isFinite(n.lat) && Number.isFinite(n.lon));
+      if (!nodes.length) return { type: "FeatureCollection", features: [] };
+      const c = centroidOfNodes(nodes);
+      return {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [c.lon, c.lat] },
+          properties: { lat: c.lat, lon: c.lon }
+        }]
+      };
+    }
+
     function refresh3dData() {
       if (!map3d || !map3dOverlay || map3dOverlay.hidden) return;
       const sources = {
         "t3d-heat": heatFeatures3d,
+        "t3d-cluezone": clueZoneFeatures3d,
+        "t3d-clue-centre": clueCentreFeature3d,
+        "t3d-support": supportFeatures3d,
         "t3d-esthull": estimateHullFeature3d,
         "t3d-ranges": rangePolygonFeatures3d,
         "t3d-candidates": candidateFeatures3d,
@@ -4415,7 +4460,11 @@
               confidence: l.confidence ?? null,
               confidenceTo: l.confidenceTo ?? null,
               confidenceFrom: l.confidenceFrom ?? null,
-              distanceKm: Number.isFinite(l.distanceKm) ? l.distanceKm : null
+              distanceKm: Number.isFinite(l.distanceKm) ? l.distanceKm : null,
+              oneWay: (l.direction === "to" || l.direction === "from") ? 1 : 0,
+              // The arrow points the way the link was actually confirmed, so a
+              // "from" link is drawn reversed. Matches addLinkDirectionArrow().
+              reversed: l.direction === "from" ? 1 : 0
             }
           }))
       };
@@ -4530,6 +4579,16 @@
         }
       });
       // Estimate-region outline (was terrainLayer's dashed hull).
+      m.addSource("t3d-cluezone", { type: "geojson", data: clueZoneFeatures3d() });
+      m.addLayer({
+        id: "t3d-cluezone-fill", type: "fill", source: "t3d-cluezone",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": "#f8e45c", "fill-opacity": 0.12 }
+      });
+      m.addLayer({
+        id: "t3d-cluezone-line", type: "line", source: "t3d-cluezone",
+        paint: { "line-color": "#f8e45c", "line-width": 2, "line-opacity": 0.85 }
+      });
       m.addSource("t3d-esthull", { type: "geojson", data: estimateHullFeature3d() });
       m.addLayer({
         id: "t3d-esthull-fill", type: "fill", source: "t3d-esthull",
@@ -4576,6 +4635,29 @@
       // Duplicate-prefix alternatives (was manualLayer). MapLibre cannot dash a
       // circle's stroke, so the alternative reads as accent-ringed-on-dark
       // rather than dashed; the connector line carries the dash instead.
+      m.addLayer({
+        id: "t3d-links-arrow", type: "symbol", source: "t3d-links",
+        filter: ["==", ["get", "oneWay"], 1],
+        layout: {
+          "symbol-placement": "line-center",
+          "text-field": ">",
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 16,
+          "text-rotate": ["case", ["==", ["get", "reversed"], 1], 180, 0],
+          "text-rotation-alignment": "map",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true
+        },
+        paint: { "text-color": "#8ef0d1", "text-halo-color": "#0a1b24", "text-halo-width": 1.2 }
+      });
+      m.addSource("t3d-support", { type: "geojson", data: supportFeatures3d() });
+      m.addLayer({
+        id: "t3d-support-circle", type: "circle", source: "t3d-support",
+        paint: {
+          "circle-radius": 5, "circle-color": "#7dd3fc", "circle-opacity": 0.6,
+          "circle-stroke-color": "#0a1b24", "circle-stroke-width": 2, "circle-stroke-opacity": 0.6
+        }
+      });
       m.addSource("t3d-manual", { type: "geojson", data: manualFeatures3d() });
       m.addLayer({
         id: "t3d-manual-line", type: "line", source: "t3d-manual",
@@ -4592,6 +4674,14 @@
       m.addSource("t3d-obs", { type: "geojson", data: fc3dPoints(currentMatchedNodes) });
       m.addLayer({ id: "t3d-obs-circle", type: "circle", source: "t3d-obs", paint: { "circle-radius": 6, "circle-color": "#9be564", "circle-stroke-color": "#0a1b24", "circle-stroke-width": 2 } });
       m.addLayer({ id: "t3d-obs-label", type: "symbol", source: "t3d-obs", layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": 11, "text-offset": [0, 1.2], "text-anchor": "top", "text-allow-overlap": false }, paint: { "text-color": "#eaf6ff", "text-halo-color": "#0a1b24", "text-halo-width": 1.4 } });
+      m.addSource("t3d-clue-centre", { type: "geojson", data: clueCentreFeature3d() });
+      m.addLayer({
+        id: "t3d-clue-centre-circle", type: "circle", source: "t3d-clue-centre",
+        paint: {
+          "circle-radius": 8, "circle-color": "#f8e45c", "circle-opacity": 0.95,
+          "circle-stroke-color": "#fff7b2", "circle-stroke-width": 2
+        }
+      });
       m.addSource("t3d-est", { type: "geojson", data: estFeatures3d() });
       m.addLayer({ id: "t3d-est-circle", type: "circle", source: "t3d-est", paint: {
         "circle-radius": ["case", ["==", ["get", "best"], 1], 9, 5],
@@ -4646,7 +4736,8 @@
     function add3dInteractions(m) {
       const clickable = [
         "t3d-links-line", "t3d-obs-circle", "t3d-candidates-fill",
-        "t3d-candidate-pts-circle", "t3d-manual-circle", "t3d-est-circle"
+        "t3d-candidate-pts-circle", "t3d-manual-circle", "t3d-est-circle",
+        "t3d-support-circle", "t3d-clue-centre-circle"
       ];
       clickable.forEach((id) => {
         m.on("mouseenter", id, () => { m.getCanvas().style.cursor = "pointer"; });
@@ -4705,6 +4796,26 @@
           const node = group && group.nodes.find((n) => nodeId(n) === p.nodeKey);
           if (group && node) selectDuplicateCandidate(group, node);
         });
+      });
+
+      m.on("click", "t3d-support-circle", (e) => {
+        const p = e.features[0].properties;
+        show3dPopup(e.lngLat, `
+          <div>
+            <p class="popup-title">${p.title}</p>
+            <p class="popup-copy">Proven-link support (range only)<br>Short ID: ${p.shortId}<br>Lat/Lon: ${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}</p>
+          </div>
+        `);
+      });
+
+      m.on("click", "t3d-clue-centre-circle", (e) => {
+        const p = e.features[0].properties;
+        show3dPopup(e.lngLat, `
+          <div>
+            <p class="popup-title">Estimated clue centroid</p>
+            <p class="popup-copy">${formatEstimateLatLon({ lat: Number(p.lat), lon: Number(p.lon) })}</p>
+          </div>
+        `);
       });
 
       m.on("click", "t3d-est-circle", (e) => {

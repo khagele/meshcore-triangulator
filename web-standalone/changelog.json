@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-terrain-control-moved",
+    "date": "2026-08-19",
+    "title": "Relief slider moved off the map",
+    "body": "The relief exaggeration slider sat on top of the 3D map, covering the thing it was there to adjust. It now sits in the controls card at the top left, next to the button that opens the 3D view, and appears only while that view is open. The wording is shorter too, and the amount of exaggeration is still shown at all times so you always know how much the hills have been stretched."
+  },
+  {
     "id": "2026-08-19-tilt-to-the-horizon",
     "date": "2026-08-19",
     "title": "Tilt the 3D view all the way to the horizon",

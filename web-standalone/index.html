@@ -1314,7 +1314,7 @@
       <div class="input-stack">
         <div class="controls-card">
           <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
-          <button id="open-3d-button" type="button" class="button-secondary" aria-pressed="false">3D View</button>
+          <button id="open-3d-button" type="button" class="button-secondary" aria-pressed="false">3D map</button>
           <button id="manual-mode-button" type="button" class="button-secondary" aria-pressed="false" hidden>Resolve on map</button>
           <button id="share-button" type="button" class="button-secondary">Share</button>
           <button id="intro-open-button" type="button" class="button-muted is-icon is-meta-first" aria-label="How this works" title="How this works">?</button>
@@ -1522,9 +1522,10 @@
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
 
+    const START_VIEW = { south: 50.6, west: 3.0, north: 53.8, east: 7.3 };
     const startBounds = L.latLngBounds(
-      [50.6, 3.0],
-      [53.8, 7.3]
+      [START_VIEW.south, START_VIEW.west],
+      [START_VIEW.north, START_VIEW.east]
     );
     map.fitBounds(startBounds, { padding: [40, 40] });
 
@@ -4735,10 +4736,6 @@
 
     // perspective=false → load flat (top-down). perspective=true → tilt in.
     async function open3DView(perspective = false) {
-      if (!currentMatchedNodes.length) {
-        terrainStatus.textContent = "Select a cluster first before opening the 3D view.";
-        return;
-      }
       map3dOverlay.hidden = false;
       sync3dToggle();
       try { await loadMaplibre(); }
@@ -4756,12 +4753,18 @@
         if (perspective) go3dPerspective();
         return;
       }
-      const center = (lastEstimatePoints && lastEstimatePoints[0]) || centroidOfNodes(currentMatchedNodes);
+      // With no cluster yet there is nothing to centre on, so fall back to the
+      // middle of the same start box the 2D map uses (#91 stage 3).
+      const center = (lastEstimatePoints && lastEstimatePoints[0])
+        || (currentMatchedNodes.length ? centroidOfNodes(currentMatchedNodes) : {
+          lat: (START_VIEW.south + START_VIEW.north) / 2,
+          lon: (START_VIEW.west + START_VIEW.east) / 2
+        });
       map3d = new maplibregl.Map({
         container: "map3d",
         style: "https://tiles.openfreemap.org/styles/liberty",
         center: [center.lon, center.lat],
-        zoom: 13, pitch: 0, bearing: 0,
+        zoom: currentMatchedNodes.length ? 13 : 6.4, pitch: 0, bearing: 0,
         // MapLibre caps pitch at 60 by default. 85 is the library ceiling and
         // the angle worth having now that there is real terrain to look along:
         // a near-horizon view is how you see what a ridge actually blocks.
@@ -4779,7 +4782,14 @@
         add3dLayers();
         add3dInteractions(map3d);
         const b = bounds3d();
-        if (b) map3d.fitBounds(b, { padding: 90, pitch: 0, bearing: 0, maxZoom: 16, duration: 0 });
+        if (b) {
+          map3d.fitBounds(b, { padding: 90, pitch: 0, bearing: 0, maxZoom: 16, duration: 0 });
+        } else {
+          map3d.fitBounds(
+            [[START_VIEW.west, START_VIEW.south], [START_VIEW.east, START_VIEW.north]],
+            { padding: 40, pitch: 0, bearing: 0, duration: 0 }
+          );
+        }
         if (perspective) go3dPerspective();
       });
     }
@@ -4800,7 +4810,9 @@
       if (!open3dButton) return;
       const open = !!(map3dOverlay && !map3dOverlay.hidden);
       open3dButton.setAttribute("aria-pressed", open ? "true" : "false");
-      open3dButton.textContent = open ? "Exit 3D" : "3D View";
+      // The 3D map is the default, so the control offers the way OUT of it
+      // rather than the way in.
+      open3dButton.textContent = open ? "Flat map" : "3D map";
     }
 
     if (terrainExaggerationInput) {
@@ -4871,6 +4883,16 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && introOverlay && !introOverlay.hidden) closeIntro();
     });
+
+    // MapLibre is the map now (#91 stage 3). It opens flat, at pitch 0, on the
+    // same country-wide box the 2D map starts on, so it reads as a map rather
+    // than as a mode you switched into. It still tilts on its own once an
+    // estimate lands, via the existing go3dPerspective path.
+    //
+    // Leaflet is still underneath and the toggle still reaches it. That is
+    // deliberate for this stage: the two maps are checked against each other
+    // while the port settles, and Leaflet comes out in stage 4.
+    open3DView(false);
 
     const showIntro = !introSeen();
     const deepLinked = applyDeepLinkParams();

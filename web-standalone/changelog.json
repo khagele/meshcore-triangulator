@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-resolve-duplicates-on-map",
+    "date": "2026-08-19",
+    "title": "Pick between same-prefix repeaters on the map",
+    "body": "Two real repeaters can share the same 2-character prefix, and the tool picks one of them for you. Which one is right is a question about where they sit, but until now you could only compare two near-identical lines of text. There is now a Resolve on map button once a cluster is locked: the candidates it did not pick appear as dashed circles, joined by a line to the one in use, and clicking one swaps it in. Any weight you set carries across the swap, and Reset puts the automatic choice back. Nothing changes until you press Apply."
+  },
+  {
     "id": "2026-08-19-coverage-falloff",
     "date": "2026-08-19",
     "title": "Sharper estimates from a softer idea of coverage",

@@ -625,6 +625,12 @@
       font-weight: 600;
     }
 
+    /* display on the class beats the UA's [hidden] { display: none }, so the
+       banner showed on a fresh visit despite carrying the attribute. */
+    .manual-banner[hidden] {
+      display: none;
+    }
+
     .manual-banner::before {
       content: "";
       width: 7px;
@@ -850,13 +856,18 @@
       background: #071118;
     }
 
-    /* MapLibre popups (#91 stage 2). Leaflet's own CSS gives its popup wrapper
-       a dark text colour, so .popup-title / .popup-copy never needed one.
+    /* MapLibre popups (#91). The old Leaflet popup got a dark text colour from
+       Leaflet's own CSS, which is why .popup-title / .popup-copy never set one.
        MapLibre's popup sets a white background and NO colour, so the same
        markup inherited body's near-white --text and rendered white on white.
-       Styling these to match the app's panels fixes it and keeps one look
-       across both maps. */
-    .maplibregl-popup-content {
+
+       Every selector here is doubled up (.maplibregl-popup .maplibregl-popup-*)
+       on purpose. maplibre-gl.css is injected into <head> at runtime by
+       loadMaplibre(), so it lands AFTER this block: at equal specificity the
+       later sheet wins and the popup went back to white on white. Extra
+       specificity is what makes these survive the load order. Same trap as the
+       candidate cards in #73, from the other direction. */
+    .maplibregl-popup .maplibregl-popup-content {
       background: rgba(7, 25, 35, 0.96);
       color: var(--text);
       border: 1px solid var(--panel-border);
@@ -870,14 +881,14 @@
     /* The tip is a CSS triangle drawn with border colours, and which side is
        used depends on the popup's anchor. Setting all four means it matches
        whichever way MapLibre decides to point it. */
-    .maplibregl-popup-tip {
+    .maplibregl-popup .maplibregl-popup-tip {
       border-top-color: rgba(7, 25, 35, 0.96);
       border-bottom-color: rgba(7, 25, 35, 0.96);
       border-left-color: rgba(7, 25, 35, 0.96);
       border-right-color: rgba(7, 25, 35, 0.96);
     }
 
-    .maplibregl-popup-close-button {
+    .maplibregl-popup .maplibregl-popup-close-button {
       background: transparent;
       border: 0;
       color: var(--muted);
@@ -887,7 +898,7 @@
       cursor: pointer;
     }
 
-    .maplibregl-popup-close-button:hover {
+    .maplibregl-popup .maplibregl-popup-close-button:hover {
       background: transparent;
       color: var(--text);
     }
@@ -1294,37 +1305,6 @@
   <main class="shell">
     <section class="panel">
       <div class="input-stack">
-        <div class="controls-card">
-          <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
-          <button id="manual-mode-button" type="button" class="button-secondary" aria-pressed="false" hidden>Resolve on map</button>
-          <button id="share-button" type="button" class="button-secondary">Share</button>
-          <button id="intro-open-button" type="button" class="button-muted is-icon is-meta-first" aria-label="How this works" title="How this works">?</button>
-          <div class="whats-new">
-            <button id="whats-new-button" type="button" class="button-muted is-icon" aria-label="What's new" aria-haspopup="dialog" title="What's new">
-              <span aria-hidden="true">🔔</span><span id="whats-new-dot" class="whats-new-dot" hidden></span>
-            </button>
-            <div id="whats-new-panel" class="whats-new-panel" role="dialog" aria-label="What's new" hidden>
-              <div id="whats-new-list"></div>
-            </div>
-          </div>
-          <!-- Full-width rows last: they wrap below the button row rather
-               than pushing the right-aligned bell onto a second line. -->
-          <div id="terrain-control" class="terrain-control" hidden>
-            <label for="terrain-exaggeration">
-              <span>Relief exaggeration</span>
-              <b id="terrain-exaggeration-value">6.0x</b>
-            </label>
-            <input id="terrain-exaggeration" type="range" min="1" max="12" step="0.5" value="6">
-            <p class="terrain-control-note">
-              A ~30 m global model, for looking at. Step 3 measures line of sight from AHN at 0.5 m.
-            </p>
-          </div>
-          <p id="share-status" class="share-status" role="status" hidden></p>
-          <label id="share-fallback" class="share-fallback" hidden>
-            Copy this link:
-            <input id="share-fallback-input" type="text" readonly>
-          </label>
-        </div>
         <section class="step-panel is-locked" id="panel-discovery">
           <span class="step-kicker">Step 1</span>
           <h3>Clues + Regions</h3>
@@ -1363,6 +1343,37 @@
           <button id="terrain-rescore-button" type="button" class="button-secondary" disabled>Refine with Terrain + LOS</button>
           <p id="terrain-status">Run a weighted observer estimate first. Terrain and LOS are an optional refinement after that.</p>
         </section>
+        <div class="controls-card">
+          <button id="clear-map-button" type="button" class="button-muted">Clear Map</button>
+          <button id="manual-mode-button" type="button" class="button-secondary" aria-pressed="false" hidden>Resolve on map</button>
+          <button id="share-button" type="button" class="button-secondary">Share</button>
+          <button id="intro-open-button" type="button" class="button-muted is-icon is-meta-first" aria-label="How this works" title="How this works">?</button>
+          <div class="whats-new">
+            <button id="whats-new-button" type="button" class="button-muted is-icon" aria-label="What's new" aria-haspopup="dialog" title="What's new">
+              <span aria-hidden="true">🔔</span><span id="whats-new-dot" class="whats-new-dot" hidden></span>
+            </button>
+            <div id="whats-new-panel" class="whats-new-panel" role="dialog" aria-label="What's new" hidden>
+              <div id="whats-new-list"></div>
+            </div>
+          </div>
+          <!-- Full-width rows last: they wrap below the button row rather
+               than pushing the right-aligned bell onto a second line. -->
+          <div id="terrain-control" class="terrain-control" hidden>
+            <label for="terrain-exaggeration">
+              <span>Relief exaggeration</span>
+              <b id="terrain-exaggeration-value">6.0x</b>
+            </label>
+            <input id="terrain-exaggeration" type="range" min="1" max="12" step="0.5" value="6">
+            <p class="terrain-control-note">
+              A ~30 m global model, for looking at. Step 3 measures line of sight from AHN at 0.5 m.
+            </p>
+          </div>
+          <p id="share-status" class="share-status" role="status" hidden></p>
+          <label id="share-fallback" class="share-fallback" hidden>
+            Copy this link:
+            <input id="share-fallback-input" type="text" readonly>
+          </label>
+        </div>
       </div>
     </section>
 

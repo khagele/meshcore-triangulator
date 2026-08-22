@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-08-19-step-one-first",
+    "date": "2026-08-19",
+    "title": "Step 1 is the first thing you see",
+    "body": "The buttons and the relief slider sat above Step 1, pushing the thing you actually came to do down the page. They are now below the three steps. Map popups were also white on white; fixed."
+  },
+  {
     "id": "2026-08-19-one-map",
     "date": "2026-08-19",
     "title": "One map instead of two",
